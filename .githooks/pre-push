@@ -5,6 +5,9 @@ protected_ref="refs/heads/main"
 
 while read local_ref local_sha remote_ref remote_sha
 do
+    local_sha=$(printf '%s' "$local_sha" | tr -d '\r')
+    remote_sha=$(printf '%s' "$remote_sha" | tr -d '\r')
+
     if [ "$remote_ref" != "$protected_ref" ]; then
         continue
     fi
