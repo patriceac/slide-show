@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Slide Show</title>
+  <link rel="stylesheet" href="/assets/slideshow.css?v=20260527">
+</head>
+<body>
+  <main id="stage" class="stage">
+    <img id="slideImage" alt="">
+    <div id="emptyState" class="empty-state">
+      <h1>Choose an image folder</h1>
+      <p>Open the control center on this computer to pick a folder.</p>
+    </div>
+    <div id="chrome" class="chrome">
+      <header class="top-bar">
+        <div>
+          <strong id="folderName">Slide Show</strong>
+          <span id="positionText">0 / 0</span>
+        </div>
+      </header>
+      <nav class="controls" aria-label="Slideshow controls">
+        <button id="settingsToggle" aria-expanded="false" aria-controls="settingsPanel">Settings</button>
+      </nav>
+    </div>
+    <section id="settingsPanel" class="settings-panel" aria-labelledby="settingsTitle" hidden>
+      <h2 id="settingsTitle">Playback</h2>
+      <p id="timerText"></p>
+      <div class="panel-controls" aria-label="Timer controls">
+        <button id="slower" type="button">- 1 sec</button>
+        <button id="faster" type="button">+ 1 sec</button>
+      </div>
+      <p class="panel-label">Image size</p>
+      <div class="panel-controls" aria-label="Image size controls">
+        <button id="fitMode" type="button">Fit</button>
+        <button id="fullMode" type="button">Full</button>
+      </div>
+      <div id="switchFolderGroup" class="switch-folder-group" hidden>
+        <p class="panel-label">Slideshow</p>
+        <button id="switchFolder" class="wide-panel-button" type="button">Switch folder</button>
+      </div>
+    </section>
+    <div id="tapFeedback" class="tap-feedback" aria-hidden="true" hidden></div>
+  </main>
+  <script src="/assets/slideshow.js?v=20260525"></script>
+</body>
+</html>

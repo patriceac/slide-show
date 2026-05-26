@@ -1,0 +1,32 @@
+# Build outputs
+bin/
+obj/
+artifacts/
+
+# Local tooling
+.playwright-mcp/
+.vs/
+.vscode/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# .NET publish artifacts
+*.nupkg
+*.snupkg
+
+# Android/Gradle generated files
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
