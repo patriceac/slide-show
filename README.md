@@ -23,6 +23,15 @@ cd android
 gradle assembleRelease
 ```
 
+## Git Safety
+
+This repo includes a local pre-push hook that blocks deleting or rewriting `main`.
+Enable it in a checkout with:
+
+```powershell
+git config core.hooksPath .githooks
+```
+
 ## Project Layout
 
 - `wwwroot/` contains the slideshow and control web UI.
