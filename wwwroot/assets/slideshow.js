@@ -181,6 +181,10 @@ function togglePlayback() {
   schedule();
 }
 
+function playbackStatusText() {
+  return playing ? "Playing" : "Paused";
+}
+
 function showChrome() {
   slideshowChrome.classList.remove("hidden");
   clearTimeout(chromeTimer);
@@ -352,7 +356,7 @@ stage.addEventListener("click", event => {
     showTapFeedback("\u203a", "end");
   } else {
     togglePlayback();
-    showTapFeedback(playing ? "Play" : "Pause", "center");
+    showTapFeedback(playbackStatusText(), "center");
   }
 
   showChromeTemporarily();
@@ -372,7 +376,7 @@ document.addEventListener("keydown", event => {
   } else if (event.key === " ") {
     event.preventDefault();
     togglePlayback();
-    showTapFeedback(playing ? "Play" : "Pause", "center");
+    showTapFeedback(playbackStatusText(), "center");
   }
   showChromeTemporarily();
 });

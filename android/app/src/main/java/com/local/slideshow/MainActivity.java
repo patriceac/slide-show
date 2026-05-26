@@ -514,12 +514,14 @@ public class MainActivity extends Activity {
     }
 
     private String savedCatalogSummary(OfflineImageStore.OfflineCatalog catalog) {
-        if (catalog.hasPin() && catalog.images.isEmpty()) {
+        if (catalog.hasPin() && !isCatalogUnlocked(catalog)) {
             return "Protected saved slideshow";
         }
 
         String status = catalog.images.isEmpty() ? "Saved offline entry" : "Saved for offline playback";
-        return catalog.hasPin() ? status + " - Protected" : status;
+        String fileCount = catalog.images.size() == 1 ? "1 image" : catalog.images.size() + " images";
+        String details = status + " - " + fileCount + " - " + sizeText(catalog.sizeBytes);
+        return catalog.hasPin() ? details + " - Protected" : details;
     }
 
     private String sizeText(long bytes) {
@@ -1474,6 +1476,10 @@ public class MainActivity extends Activity {
         if (positionText != null) {
             positionText.setText("Locked");
         }
+        if (settingsPanel != null) {
+            buildSettingsPanel();
+            setSettingsPanelVisible(false);
+        }
     }
 
     private void leaveProtectedSlideshow() {
@@ -1714,6 +1720,10 @@ public class MainActivity extends Activity {
         scheduleNext();
     }
 
+    private String playbackStatusText() {
+        return playing ? "Playing" : "Paused";
+    }
+
     private void handleSlideshowTap(float x) {
         if (images.isEmpty()) {
             showChromeTemporarily();
@@ -1733,7 +1743,7 @@ public class MainActivity extends Activity {
             advance(1);
         } else {
             togglePlay();
-            showTapFeedback(playing ? "Play" : "Pause", Gravity.CENTER);
+            showTapFeedback(playbackStatusText(), Gravity.CENTER);
         }
 
         showChromeTemporarily();
@@ -1944,7 +1954,7 @@ public class MainActivity extends Activity {
                 JSONObject state = getJson(info.baseUrl() + "/api/state");
                 String nextIdentity = OfflineImageStore.folderIdentityFor(info.key(), state);
                 long nextVersion = state.optLong("version", 0);
-                if (catalog != null && nextIdentity.equals(catalog.folderIdentity) && nextVersion == catalog.serverVersion) {
+                if (catalog != null && nextIdentity.equals(catalog.folderIdentity) && nextVersion == catalog.serverVersion && catalog.usesCurrentImageFormat()) {
                     return;
                 }
 

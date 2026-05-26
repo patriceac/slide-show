@@ -3,6 +3,7 @@ package com.local.slideshow;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.os.Build;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.util.Base64;
@@ -11,6 +12,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -65,6 +67,9 @@ final class OfflineImageStore {
     private static final int PIN_SALT_BYTES = 16;
     private static final int PIN_HASH_BYTES = 32;
     private static final int PIN_HASH_ITERATIONS = 120000;
+    private static final String OFFLINE_IMAGE_FORMAT_VERSION = "webp-q90-native-v1";
+    private static final int OFFLINE_WEBP_QUALITY = 90;
+    private static final int MAX_OPTIMIZE_SOURCE_BYTES = 64 * 1024 * 1024;
 
     private final File rootDirectory;
     private final File legacyImageDirectory;
@@ -228,7 +233,8 @@ final class OfflineImageStore {
                 continue;
             }
 
-            nextImages.add(new MainActivity.SlideImage(name, path, encryptedFileName(serverKey, cacheKey.isEmpty() ? legacyCacheKey(path, name) : cacheKey)));
+            String sourceCacheKey = cacheKey.isEmpty() ? legacyCacheKey(path, name) : cacheKey;
+            nextImages.add(new MainActivity.SlideImage(name, path, encryptedFileName(serverKey, offlineCacheKey(sourceCacheKey))));
         }
 
         AtomicInteger completedCount = new AtomicInteger();
@@ -251,6 +257,7 @@ final class OfflineImageStore {
             state.optLong("version", 0),
             System.currentTimeMillis(),
             0,
+            OFFLINE_IMAGE_FORMAT_VERSION,
             preserveProtection ? existing.pinSalt : "",
             preserveProtection ? existing.pinHash : "",
             nextImages);
@@ -402,7 +409,7 @@ final class OfflineImageStore {
                     boolean needsDownload = storageKind != ImageStorageKind.MEDIA_ENCRYPTED;
                     if (needsDownload) {
                         try {
-                            downloadMediaEncrypted(baseUrl + image.path, imageFile);
+                            downloadOptimizedMediaEncrypted(baseUrl + image.path, imageFile);
                         } catch (Exception error) {
                             if (storageKind == ImageStorageKind.MISSING) {
                                 throw error;
@@ -441,7 +448,7 @@ final class OfflineImageStore {
         }
     }
 
-    private void downloadMediaEncrypted(String address, File destination) throws Exception {
+    private void downloadOptimizedMediaEncrypted(String address, File destination) throws Exception {
         File partial = new File(destination.getParentFile(), destination.getName() + ".part");
         if (partial.exists() && !partial.delete()) {
             throw new IllegalStateException("Could not replace partial download.");
@@ -461,7 +468,12 @@ final class OfflineImageStore {
             }
 
             try (InputStream input = connection.getInputStream()) {
-                writeMediaEncryptedFile(partial, input);
+                int length = connection.getContentLength();
+                if (length > 0 && length <= MAX_OPTIMIZE_SOURCE_BYTES) {
+                    writeOptimizedMediaEncryptedFile(partial, readFully(input));
+                } else {
+                    writeMediaEncryptedFile(partial, input);
+                }
                 if (destination.exists() && !destination.delete()) {
                     throw new IllegalStateException("Could not replace image.");
                 }
@@ -570,24 +582,51 @@ final class OfflineImageStore {
     }
 
     private void writeMediaEncryptedFile(File destination, InputStream plaintext) throws Exception {
-        Cipher cipher = Cipher.getInstance(TRANSFORMATION);
-        byte[] iv = new byte[12];
-        new SecureRandom().nextBytes(iv);
-        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateMediaKey(), new GCMParameterSpec(GCM_TAG_BITS, iv));
-
         try (FileOutputStream file = new FileOutputStream(destination);
-             CipherOutputStream encrypted = new CipherOutputStream(file, cipher)) {
-            file.write(MEDIA_MAGIC);
-            file.write(FORMAT_VERSION);
-            file.write(iv.length);
-            file.write(iv);
-
+             CipherOutputStream encrypted = openMediaEncryptedOutput(file)) {
             byte[] buffer = new byte[64 * 1024];
             int read;
             while ((read = plaintext.read(buffer)) != -1) {
                 encrypted.write(buffer, 0, read);
             }
         }
+    }
+
+    private void writeOptimizedMediaEncryptedFile(File destination, byte[] sourceBytes) throws Exception {
+        Bitmap bitmap = null;
+        try {
+            bitmap = BitmapFactory.decodeByteArray(sourceBytes, 0, sourceBytes.length);
+            if (bitmap == null) {
+                writeMediaEncryptedFile(destination, new ByteArrayInputStream(sourceBytes));
+                return;
+            }
+
+            try (FileOutputStream file = new FileOutputStream(destination);
+                 CipherOutputStream encrypted = openMediaEncryptedOutput(file)) {
+                if (!bitmap.compress(webpCompressFormat(), OFFLINE_WEBP_QUALITY, encrypted)) {
+                    throw new IllegalStateException("Could not optimize image.");
+                }
+            }
+        } catch (OutOfMemoryError error) {
+            writeMediaEncryptedFile(destination, new ByteArrayInputStream(sourceBytes));
+        } finally {
+            if (bitmap != null && !bitmap.isRecycled()) {
+                bitmap.recycle();
+            }
+        }
+    }
+
+    private CipherOutputStream openMediaEncryptedOutput(FileOutputStream file) throws Exception {
+        Cipher cipher = Cipher.getInstance(TRANSFORMATION);
+        byte[] iv = new byte[12];
+        new SecureRandom().nextBytes(iv);
+        cipher.init(Cipher.ENCRYPT_MODE, getOrCreateMediaKey(), new GCMParameterSpec(GCM_TAG_BITS, iv));
+
+        file.write(MEDIA_MAGIC);
+        file.write(FORMAT_VERSION);
+        file.write(iv.length);
+        file.write(iv);
+        return new CipherOutputStream(file, cipher);
     }
 
     private ImageStorageKind imageStorageKind(File file) {
@@ -898,6 +937,14 @@ final class OfflineImageStore {
         return (queryIndex >= 0 ? path.substring(0, queryIndex) : path) + "\n" + name;
     }
 
+    private static String offlineCacheKey(String sourceCacheKey) {
+        return sourceCacheKey + "\n" + OFFLINE_IMAGE_FORMAT_VERSION;
+    }
+
+    private static Bitmap.CompressFormat webpCompressFormat() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? Bitmap.CompressFormat.WEBP_LOSSY : Bitmap.CompressFormat.WEBP;
+    }
+
     static String folderIdentityFor(String serverKey, JSONObject state) {
         String folderPath = cleanString(state.optString("folderPath", ""), "");
         String folderName = cleanString(state.optString("folderName", "Slide Show"), "Slide Show");
@@ -962,11 +1009,12 @@ final class OfflineImageStore {
         final long serverVersion;
         final long syncedAt;
         final long sizeBytes;
+        final String offlineImageFormat;
         final String pinSalt;
         final String pinHash;
         final List<MainActivity.SlideImage> images;
 
-        OfflineCatalog(int slotId, String serverKey, String serverName, String folderIdentity, String displayName, String folderName, String backgroundColor, String imageMode, int slideSeconds, long serverVersion, long syncedAt, long sizeBytes, String pinSalt, String pinHash, List<MainActivity.SlideImage> images) {
+        OfflineCatalog(int slotId, String serverKey, String serverName, String folderIdentity, String displayName, String folderName, String backgroundColor, String imageMode, int slideSeconds, long serverVersion, long syncedAt, long sizeBytes, String offlineImageFormat, String pinSalt, String pinHash, List<MainActivity.SlideImage> images) {
             this.slotId = slotId;
             this.serverKey = serverKey;
             this.serverName = serverName;
@@ -979,21 +1027,22 @@ final class OfflineImageStore {
             this.serverVersion = serverVersion;
             this.syncedAt = syncedAt;
             this.sizeBytes = sizeBytes;
+            this.offlineImageFormat = offlineImageFormat == null ? "" : offlineImageFormat;
             this.pinSalt = pinSalt == null ? "" : pinSalt;
             this.pinHash = pinHash == null ? "" : pinHash;
             this.images = images;
         }
 
         OfflineCatalog withDisplayName(String nextDisplayName) {
-            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, nextDisplayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, pinSalt, pinHash, images);
+            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, nextDisplayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, pinSalt, pinHash, images);
         }
 
         OfflineCatalog withSize(long nextSizeBytes) {
-            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, nextSizeBytes, pinSalt, pinHash, images);
+            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, nextSizeBytes, offlineImageFormat, pinSalt, pinHash, images);
         }
 
         OfflineCatalog withPin(String nextPinSalt, String nextPinHash) {
-            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, nextPinSalt, nextPinHash, images);
+            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, nextPinSalt, nextPinHash, images);
         }
 
         OfflineCatalog withRecoveredImages(List<MainActivity.SlideImage> recoveredImages) {
@@ -1001,11 +1050,15 @@ final class OfflineImageStore {
                 return this;
             }
 
-            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, pinSalt, pinHash, recoveredImages);
+            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, pinSalt, pinHash, recoveredImages);
         }
 
         boolean hasPin() {
             return !pinSalt.isEmpty() && !pinHash.isEmpty();
+        }
+
+        boolean usesCurrentImageFormat() {
+            return OFFLINE_IMAGE_FORMAT_VERSION.equals(offlineImageFormat);
         }
 
         JSONObject toJson() throws Exception {
@@ -1022,6 +1075,7 @@ final class OfflineImageStore {
             object.put("serverVersion", serverVersion);
             object.put("syncedAt", syncedAt);
             object.put("sizeBytes", sizeBytes);
+            object.put("offlineImageFormat", offlineImageFormat);
             object.put("pinSalt", pinSalt);
             object.put("pinHash", pinHash);
 
@@ -1071,6 +1125,7 @@ final class OfflineImageStore {
                 object.optLong("serverVersion", 0),
                 object.optLong("syncedAt", 0),
                 object.optLong("sizeBytes", 0),
+                object.optString("offlineImageFormat", ""),
                 object.optString("pinSalt", ""),
                 object.optString("pinHash", ""),
                 images);
