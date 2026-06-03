@@ -80,8 +80,9 @@ function render(state) {
     fields.serverPort.textContent = state.port;
   }
   if (fields.footerShowUrl) {
-    fields.footerShowUrl.href = state.localSlideshowUrl || "/show";
-    fields.footerShowUrl.textContent = state.localSlideshowUrl || "/show";
+    const showUrl = state.httpsEnabled ? state.httpsDisplaySlideshowUrl : state.localSlideshowUrl;
+    fields.footerShowUrl.href = showUrl || "/show";
+    fields.footerShowUrl.textContent = showUrl || "/show";
   }
   setSavePending(false);
 }
@@ -175,9 +176,12 @@ function mountSlideshowFrame() {
     return;
   }
 
+  const source = new URL(fields.openShow.href || "/show", window.location.href);
+  source.searchParams.set("embed", "1");
+
   const frame = document.createElement("iframe");
   frame.title = "Slide Show";
-  frame.src = fields.openShow.href || "/show";
+  frame.src = source.href;
   frame.allow = "fullscreen";
   slideshowOverlay.append(frame);
 }
@@ -186,16 +190,17 @@ async function openSlideshowFullscreen() {
   const overlay = createSlideshowOverlay();
 
   if (!overlay.requestFullscreen) {
-    window.location.href = fields.openShow.href || "/show";
-    return;
+    removeSlideshowOverlay();
+    return false;
   }
 
   try {
     await overlay.requestFullscreen({ navigationUI: "hide" });
     mountSlideshowFrame();
+    return true;
   } catch {
     removeSlideshowOverlay();
-    window.location.href = fields.openShow.href || "/show";
+    return false;
   }
 }
 
@@ -214,10 +219,15 @@ document.addEventListener("fullscreenchange", () => {
 
 fields.openShow.addEventListener("click", async event => {
   event.preventDefault();
+
+  if (await openSlideshowFullscreen()) {
+    return;
+  }
+
   try {
     await openNativeSlideshowWindow();
   } catch {
-    openSlideshowFullscreen();
+    window.location.href = fields.openShow.href || "/show";
   }
 });
 

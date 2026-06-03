@@ -9,6 +9,7 @@ public sealed class AppSettings
     public string ImageMode { get; set; } = "fit";
     public int SyncWorkers { get; set; } = 4;
     public int Port { get; set; } = 5177;
+    public int HttpsPort { get; set; } = 5178;
     public bool StartAtLogin { get; set; } = true;
 
     public AppSettings Copy() => new()
@@ -20,6 +21,7 @@ public sealed class AppSettings
         ImageMode = ImageMode,
         SyncWorkers = SyncWorkers,
         Port = Port,
+        HttpsPort = HttpsPort,
         StartAtLogin = StartAtLogin
     };
 
@@ -28,6 +30,11 @@ public sealed class AppSettings
         SlideSeconds = Math.Clamp(SlideSeconds, 2, 120);
         SyncWorkers = Math.Clamp(SyncWorkers, 2, 4);
         Port = Math.Clamp(Port, 1024, 65535);
+        HttpsPort = Math.Clamp(HttpsPort, 1024, 65535);
+        if (HttpsPort == Port)
+        {
+            HttpsPort = Math.Clamp(Port + 1, 1024, 65535);
+        }
 
         if (string.IsNullOrWhiteSpace(BackgroundColor) || !BackgroundColor.StartsWith('#') || BackgroundColor.Length is not (4 or 7))
         {

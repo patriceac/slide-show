@@ -22,7 +22,14 @@ public sealed class SlideshowWindow : Form, IMessageFilter
         _webView = new WebView2
         {
             Dock = DockStyle.Fill,
-            DefaultBackgroundColor = Color.Black
+            DefaultBackgroundColor = Color.Black,
+            CreationProperties = new CoreWebView2CreationProperties
+            {
+                UserDataFolder = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "Slide Show",
+                    "WebView2")
+            }
         };
         _keyboardProc = OnLowLevelKeyboard;
 

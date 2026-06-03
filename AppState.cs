@@ -30,6 +30,19 @@ public sealed class AppState
         }
     }
 
+    public int HttpsPort
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _settings.HttpsPort;
+            }
+        }
+    }
+
+    public bool HttpsEnabled { get; private set; }
+
     public AppSettings GetSettings()
     {
         lock (_gate)
@@ -47,10 +60,15 @@ public sealed class AppState
         }
 
         var localUrl = $"http://localhost:{settings.Port}";
+        var localHttpsUrl = $"https://localhost:{settings.HttpsPort}";
         var lanUrls = GetLanAddresses()
             .Select(ip => $"http://{ip}:{settings.Port}")
             .ToArray();
+        var httpsLanUrls = GetLanAddresses()
+            .Select(ip => $"https://{ip}:{settings.HttpsPort}")
+            .ToArray();
         var displayUrl = lanUrls.FirstOrDefault() ?? localUrl;
+        var httpsDisplayUrl = httpsLanUrls.FirstOrDefault() ?? localHttpsUrl;
 
         return new StateDto(
             settings.FolderPath,
@@ -61,17 +79,26 @@ public sealed class AppState
             settings.ImageMode,
             settings.SyncWorkers,
             settings.Port,
+            settings.HttpsPort,
             settings.StartAtLogin,
             _catalog.Count,
             _catalog.Version,
             _catalog.LastScannedAt,
             _catalog.ScanMessage,
             canConfigure,
+            HttpsEnabled,
             localUrl,
             $"{localUrl}/show",
             displayUrl,
             $"{displayUrl}/show",
-            lanUrls.Select(url => $"{url}/show").ToArray());
+            lanUrls.Select(url => $"{url}/show").ToArray(),
+            localHttpsUrl,
+            $"{localHttpsUrl}/show",
+            httpsDisplayUrl,
+            $"{httpsDisplayUrl}/show",
+            httpsLanUrls.Select(url => $"{url}/show").ToArray(),
+            $"{displayUrl}/certificate.cer",
+            $"{httpsDisplayUrl}/certificate.cer");
     }
 
     public IReadOnlyList<ImageDto> GetImages(bool shuffle)
@@ -89,11 +116,16 @@ public sealed class AppState
 
     public void Rescan() => _catalog.Scan(GetSettings());
 
-    public void UpdatePort(int port)
+    public void UpdatePorts(int port, int? httpsPort)
     {
         lock (_gate)
         {
             _settings.Port = port;
+            if (httpsPort.HasValue)
+            {
+                _settings.HttpsPort = httpsPort.Value;
+            }
+            HttpsEnabled = httpsPort.HasValue;
             _settings.Normalize();
             _settingsStore.Save(_settings);
         }
@@ -192,17 +224,26 @@ public sealed record StateDto(
     string ImageMode,
     int SyncWorkers,
     int Port,
+    int HttpsPort,
     bool StartAtLogin,
     int ImageCount,
     long Version,
     DateTimeOffset? LastScannedAt,
     string? ScanMessage,
     bool CanConfigure,
+    bool HttpsEnabled,
     string LocalUrl,
     string LocalSlideshowUrl,
     string DisplayUrl,
     string DisplaySlideshowUrl,
-    string[] LanSlideshowUrls);
+    string[] LanSlideshowUrls,
+    string LocalHttpsUrl,
+    string LocalHttpsSlideshowUrl,
+    string HttpsDisplayUrl,
+    string HttpsDisplaySlideshowUrl,
+    string[] HttpsLanSlideshowUrls,
+    string CertificateUrl,
+    string HttpsCertificateUrl);
 
 public sealed record ImageDto(int Id, string Name, string Url, string CacheKey);
 

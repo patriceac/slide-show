@@ -212,7 +212,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             try
             {
-                var url = $"http://localhost:{_state.Port}/show";
+                var url = $"http://localhost:{_state.Port}/show?window=1";
                 if (_slideshowWindow is { IsDisposed: false })
                 {
                     _slideshowWindow.Close();
@@ -251,7 +251,8 @@ public sealed class TrayApplicationContext : ApplicationContext
     {
         try
         {
-            var link = _state.GetSnapshot(true).DisplaySlideshowUrl;
+            var snapshot = _state.GetSnapshot(true);
+            var link = snapshot.HttpsEnabled ? snapshot.HttpsDisplaySlideshowUrl : snapshot.DisplaySlideshowUrl;
             Clipboard.SetText(link);
         }
         catch

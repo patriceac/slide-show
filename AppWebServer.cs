@@ -9,6 +9,7 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 
 namespace SlideShow;
 
@@ -18,6 +19,7 @@ public sealed class AppWebServer : IAsyncDisposable
     private readonly Func<string?, Task<string?>> _chooseFolderAsync;
     private readonly Func<Task> _openSlideshowWindowAsync;
     private WebApplication? _app;
+    private HttpsCertificateStore? _httpsCertificates;
 
     public AppWebServer(AppState state, Func<string?, Task<string?>> chooseFolderAsync, Func<Task> openSlideshowWindowAsync)
     {
@@ -29,9 +31,20 @@ public sealed class AppWebServer : IAsyncDisposable
     public async Task StartAsync()
     {
         var preferredPort = _state.GetSettings().Port;
+        var preferredHttpsPort = _state.GetSettings().HttpsPort;
+        try
+        {
+            _httpsCertificates = new HttpsCertificateStore();
+        }
+        catch
+        {
+            _httpsCertificates = null;
+        }
+
         for (var attempt = 0; attempt < 20; attempt++)
         {
             var port = preferredPort + attempt;
+            var httpsPort = preferredHttpsPort + attempt;
             var builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
                 Args = [],
@@ -48,8 +61,12 @@ public sealed class AppWebServer : IAsyncDisposable
             builder.WebHost.UseKestrel(options =>
             {
                 options.AddServerHeader = false;
+                options.ListenAnyIP(port);
+                if (_httpsCertificates is not null)
+                {
+                    options.ListenAnyIP(httpsPort, listen => listen.UseHttps(_httpsCertificates.ServerCertificate));
+                }
             });
-            builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
             var app = builder.Build();
             Configure(app);
@@ -58,7 +75,7 @@ public sealed class AppWebServer : IAsyncDisposable
             {
                 await app.StartAsync();
                 _app = app;
-                _state.UpdatePort(port);
+                _state.UpdatePorts(port, _httpsCertificates is null ? null : httpsPort);
                 return;
             }
             catch
@@ -84,6 +101,8 @@ public sealed class AppWebServer : IAsyncDisposable
         var assetsRoot = Path.Combine(webRoot, "assets");
         var settingsPage = Path.Combine(webRoot, "pages", "settings.html");
         var slideshowPage = Path.Combine(webRoot, "pages", "slideshow.html");
+        var manifestPath = Path.Combine(webRoot, "manifest.webmanifest");
+        var serviceWorkerPath = Path.Combine(webRoot, "service-worker.js");
 
         if (Directory.Exists(assetsRoot))
         {
@@ -119,6 +138,21 @@ public sealed class AppWebServer : IAsyncDisposable
         });
 
         app.MapGet("/show", (HttpContext context) => NoCacheFile(context, slideshowPage, "text/html"));
+        app.MapGet("/manifest.webmanifest", (HttpContext context) => NoCacheFile(context, manifestPath, "application/manifest+json"));
+        app.MapGet("/service-worker.js", (HttpContext context) =>
+        {
+            context.Response.Headers["Service-Worker-Allowed"] = "/";
+            return NoCacheFile(context, serviceWorkerPath, "text/javascript");
+        });
+        app.MapGet("/certificate.cer", () =>
+        {
+            if (_httpsCertificates is null)
+            {
+                return Results.NotFound();
+            }
+
+            return Results.File(_httpsCertificates.RootCertificateBytes, "application/x-x509-ca-cert", "slide-show-local-root.cer");
+        });
         app.MapGet("/api/state", (HttpContext context) => Results.Json(_state.GetSnapshot(IsLocalRequest(context))));
         app.MapGet("/api/images", (HttpContext context) =>
         {

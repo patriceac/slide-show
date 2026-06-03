@@ -37,6 +37,7 @@ body {
   opacity: 0;
   transition: opacity 260ms ease;
   user-select: none;
+  pointer-events: none;
 }
 
 #slideImage.visible {
@@ -53,6 +54,7 @@ body {
   text-align: center;
   color: white;
   background: #05070a;
+  pointer-events: none;
 }
 
 .empty-state h1 {
@@ -92,7 +94,7 @@ body {
   justify-content: space-between;
   align-items: center;
   min-height: 44px;
-  padding-right: 204px;
+  padding-right: 270px;
   transition: opacity 200ms ease, transform 200ms ease;
 }
 
@@ -101,7 +103,7 @@ body {
   gap: 12px;
   align-items: center;
   min-height: 40px;
-  max-width: min(70vw, calc(100vw - 240px));
+  max-width: min(70vw, calc(100vw - 306px));
   border-radius: 8px;
   padding: 0 12px;
   background: rgba(0, 0, 0, 0.48);
@@ -124,6 +126,7 @@ body {
   top: max(18px, env(safe-area-inset-top));
   right: max(18px, env(safe-area-inset-right));
   display: flex;
+  gap: 8px;
   justify-content: flex-end;
   pointer-events: auto;
   transition: opacity 200ms ease, transform 200ms ease;
@@ -134,7 +137,7 @@ body {
 }
 
 .controls button {
-  min-width: 132px;
+  min-width: 118px;
   height: 44px;
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 8px;
@@ -205,6 +208,15 @@ body {
   display: none;
 }
 
+.offline-group {
+  display: grid;
+  gap: 8px;
+}
+
+.offline-group [hidden] {
+  display: none;
+}
+
 .panel-controls {
   display: flex;
   gap: 8px;
@@ -239,6 +251,143 @@ body {
 .wide-panel-button:disabled {
   cursor: wait;
   opacity: 0.64;
+}
+
+.offline-modal {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.58);
+  color: white;
+}
+
+.offline-modal[hidden] {
+  display: none;
+}
+
+.modal-card {
+  width: min(560px, 100%);
+  max-height: min(760px, calc(100vh - 36px));
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 18px;
+  background: rgba(11, 16, 20, 0.96);
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.5);
+}
+
+.modal-card h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.modal-card p {
+  margin: 8px 0 0;
+  color: rgba(255, 255, 255, 0.76);
+  line-height: 1.4;
+}
+
+.modal-stack {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.modal-field {
+  display: grid;
+  gap: 6px;
+}
+
+.modal-field span {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.modal-field input {
+  width: 100%;
+  height: 44px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: white;
+  font: inherit;
+}
+
+.modal-actions,
+.catalog-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.modal-actions {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.modal-card button {
+  min-height: 44px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 0 14px;
+  background: rgba(255, 255, 255, 0.08);
+  color: white;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.modal-card button.primary {
+  background: #176c5f;
+  border-color: #176c5f;
+}
+
+.modal-card button.danger {
+  background: rgba(150, 36, 46, 0.82);
+  border-color: rgba(255, 129, 140, 0.38);
+}
+
+.catalog-list {
+  display: grid;
+  gap: 10px;
+}
+
+.catalog-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.catalog-card strong {
+  font-size: 16px;
+}
+
+.catalog-card small {
+  color: rgba(255, 255, 255, 0.66);
+}
+
+.sync-progress {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.sync-progress span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: #2ec0a7;
+  transition: width 180ms ease;
 }
 
 .tap-feedback {
@@ -291,15 +440,15 @@ body {
   }
 
   .top-bar {
-    padding-right: 150px;
+    padding-right: 212px;
   }
 
   .top-bar > div {
-    max-width: calc(100vw - 186px);
+    max-width: calc(100vw - 248px);
   }
 
   .controls button {
-    min-width: 112px;
+    min-width: 96px;
     height: 42px;
     padding: 0 14px;
   }

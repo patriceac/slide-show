@@ -1,0 +1,19 @@
+{
+  "name": "Slide Show",
+  "short_name": "Slide Show",
+  "description": "Local slideshow viewer with encrypted offline playback.",
+  "start_url": "/show",
+  "scope": "/",
+  "display": "fullscreen",
+  "background_color": "#05070a",
+  "theme_color": "#176c5f",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/assets/darkroom-stage.png",
+      "sizes": "1717x916",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
