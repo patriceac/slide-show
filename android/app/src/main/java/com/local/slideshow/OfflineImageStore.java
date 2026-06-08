@@ -219,23 +219,7 @@ final class OfflineImageStore {
             ? cleanString(existing.displayName, folderName)
             : folderName;
 
-        List<MainActivity.SlideImage> nextImages = new ArrayList<>();
-        for (int i = 0; i < imageList.length(); i++) {
-            JSONObject item = imageList.optJSONObject(i);
-            if (item == null) {
-                continue;
-            }
-
-            String path = item.optString("url", "");
-            String name = item.optString("name", "Image");
-            String cacheKey = item.optString("cacheKey", "");
-            if (path.isEmpty()) {
-                continue;
-            }
-
-            String sourceCacheKey = cacheKey.isEmpty() ? legacyCacheKey(path, name) : cacheKey;
-            nextImages.add(new MainActivity.SlideImage(name, path, encryptedFileName(serverKey, offlineCacheKey(sourceCacheKey))));
-        }
+        List<MainActivity.SlideImage> nextImages = imagesForSource(serverKey, imageList);
 
         AtomicInteger completedCount = new AtomicInteger();
         int workerCount = normalizeSyncWorkers(syncWorkers);
@@ -264,6 +248,97 @@ final class OfflineImageStore {
 
         writeCatalog(catalog);
         catalog = catalog.withSize(catalogSizeBytes(slotId));
+        writeCatalog(catalog);
+        return catalog;
+    }
+
+    private List<MainActivity.SlideImage> imagesForSource(String serverKey, JSONArray imageList) throws Exception {
+        List<MainActivity.SlideImage> nextImages = new ArrayList<>();
+        for (int i = 0; i < imageList.length(); i++) {
+            JSONObject item = imageList.optJSONObject(i);
+            if (item == null) {
+                continue;
+            }
+
+            String path = item.optString("url", "");
+            String name = item.optString("name", "Image");
+            String cacheKey = item.optString("cacheKey", "");
+            if (path.isEmpty()) {
+                continue;
+            }
+
+            String sourceCacheKey = cacheKey.isEmpty() ? legacyCacheKey(path, name) : cacheKey;
+            nextImages.add(new MainActivity.SlideImage(name, path, encryptedFileName(serverKey, offlineCacheKey(sourceCacheKey))));
+        }
+
+        return nextImages;
+    }
+
+    boolean catalogMatchesSource(OfflineCatalog catalog, String serverKey, JSONArray imageList) throws Exception {
+        if (catalog == null) {
+            return false;
+        }
+
+        List<MainActivity.SlideImage> nextImages = imagesForSource(serverKey, imageList);
+        if (catalog.images.size() != nextImages.size()) {
+            return false;
+        }
+
+        for (int i = 0; i < nextImages.size(); i++) {
+            MainActivity.SlideImage current = catalog.images.get(i);
+            MainActivity.SlideImage next = nextImages.get(i);
+            if (!current.encryptedFileName.equals(next.encryptedFileName) || !current.name.equals(next.name)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    boolean catalogMatchesMetadata(OfflineCatalog catalog, String serverKey, JSONObject state) {
+        if (catalog == null) {
+            return false;
+        }
+
+        String folderIdentity = folderIdentityFor(serverKey, state);
+        String folderName = cleanString(state.optString("folderName", "Slide Show"), "Slide Show");
+        String legacyFolderIdentity = folderIdentity(serverKey, folderName);
+        return (folderIdentity.equals(catalog.folderIdentity) || legacyFolderIdentity.equals(catalog.folderIdentity))
+            && folderName.equals(catalog.folderName)
+            && cleanString(state.optString("backgroundColor", "#05070a"), "#05070a").equals(catalog.backgroundColor)
+            && cleanString(state.optString("imageMode", "fit"), "fit").equals(catalog.imageMode)
+            && state.optInt("slideSeconds", 7) == catalog.slideSeconds;
+    }
+
+    OfflineCatalog updateCatalogMetadata(int slotId, String serverKey, String serverName, JSONObject state) throws Exception {
+        OfflineCatalog existing = loadCatalog(slotId);
+        if (existing == null) {
+            return null;
+        }
+
+        String folderName = cleanString(state.optString("folderName", "Slide Show"), "Slide Show");
+        String folderIdentity = folderIdentityFor(serverKey, state);
+        String legacyFolderIdentity = folderIdentity(serverKey, folderName);
+        String displayName = folderIdentity.equals(existing.folderIdentity) || legacyFolderIdentity.equals(existing.folderIdentity)
+            ? cleanString(existing.displayName, folderName)
+            : folderName;
+        OfflineCatalog catalog = new OfflineCatalog(
+            slotId,
+            serverKey,
+            serverName,
+            folderIdentity,
+            displayName,
+            folderName,
+            cleanString(state.optString("backgroundColor", "#05070a"), "#05070a"),
+            cleanString(state.optString("imageMode", "fit"), "fit"),
+            state.optInt("slideSeconds", 7),
+            state.optLong("version", existing.serverVersion),
+            existing.syncedAt,
+            existing.sizeBytes,
+            existing.offlineImageFormat,
+            existing.pinSalt,
+            existing.pinHash,
+            existing.images);
         writeCatalog(catalog);
         return catalog;
     }

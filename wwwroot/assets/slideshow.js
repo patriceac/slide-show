@@ -14,14 +14,16 @@ import {
   deleteCatalog,
   deleteLocalKey,
   estimateStorage,
+  folderIdentityFor,
   getImagesForCatalog,
   getLocalKey,
   listCatalogs,
+  makeServerKey,
   saveCatalogBundle,
   saveLocalKey,
   updateCatalog
 } from "./offline-store.js?v=20260529-offline2";
-import { getSyncPlan, syncCatalog } from "./offline-sync.js?v=20260529-offline2";
+import { getSyncPlan, syncCatalog } from "./offline-sync.js?v=20260603-auto-refresh";
 
 const stage = document.querySelector("#stage");
 const image = document.querySelector("#slideImage");
@@ -115,6 +117,31 @@ function etaText(completed, total, elapsedMs) {
   return seconds < 60 ? `ETA ${seconds}s` : `ETA ${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
+function offlineRecordsMatchSource(records, imageList) {
+  if (records.length !== imageList.length) {
+    return false;
+  }
+
+  const recordsByKey = new Map(records.map(record => [record.cacheKey, record.name || "Image"]));
+  return imageList.every(image => recordsByKey.get(image.cacheKey) === (image.name || "Image"));
+}
+
+function getCatalogMetadataUpdate(catalog, nextState) {
+  return {
+    ...catalog,
+    folderName: nextState.folderName || catalog.folderName,
+    folderPath: nextState.folderPath || "",
+    imageMode: nextState.imageMode || catalog.imageMode || "fit",
+    slideSeconds: nextState.slideSeconds || catalog.slideSeconds || 7,
+    backgroundColor: nextState.backgroundColor || catalog.backgroundColor || "#05070a"
+  };
+}
+
+function catalogMetadataChanged(catalog, nextCatalog) {
+  return ["folderName", "folderPath", "imageMode", "slideSeconds", "backgroundColor"]
+    .some(key => catalog[key] !== nextCatalog[key]);
+}
+
 async function fetchJson(path, options) {
   const response = await fetch(path, { cache: "no-store", ...options });
   if (!response.ok) {
@@ -148,14 +175,29 @@ function isNativeSlideshowWindow() {
     Boolean(window.chrome?.webview);
 }
 
-function updateFullscreenButton() {
-  if (!fullscreenToggle) {
-    return;
+function isPlaybackFullscreen() {
+  return Boolean(document.fullscreenElement) || isStandaloneDisplay() || isNativeSlideshowWindow();
+}
+
+function shouldHideMouseCursor() {
+  const chromeVisible = !slideshowChrome.classList.contains("hidden");
+  const settingsVisible = !settingsPanel.hidden;
+  const modalVisible = !offlineModal.hidden;
+  return isPlaybackFullscreen() && playing && images.length > 0 && !chromeVisible && !settingsVisible && !modalVisible;
+}
+
+function updateFullscreenState() {
+  if (fullscreenToggle) {
+    const fullscreen = Boolean(document.fullscreenElement);
+    fullscreenToggle.textContent = fullscreen ? "Exit" : "Open full screen";
+    fullscreenToggle.hidden = isStandaloneDisplay() || isNativeSlideshowWindow();
   }
 
-  const fullscreen = Boolean(document.fullscreenElement);
-  fullscreenToggle.textContent = fullscreen ? "Exit" : "Open full screen";
-  fullscreenToggle.hidden = isStandaloneDisplay() || isNativeSlideshowWindow();
+  stage.classList.toggle("is-playback-fullscreen", shouldHideMouseCursor());
+}
+
+function updateMouseCursorVisibility() {
+  stage.classList.toggle("is-playback-fullscreen", shouldHideMouseCursor());
 }
 
 async function openNativeSlideshowWindow() {
@@ -412,6 +454,7 @@ async function advance(delta) {
 function togglePlayback() {
   playing = !playing;
   schedule();
+  updateMouseCursorVisibility();
 }
 
 function playbackStatusText() {
@@ -421,6 +464,7 @@ function playbackStatusText() {
 function showChrome() {
   slideshowChrome.classList.remove("hidden");
   clearTimeout(chromeTimer);
+  updateMouseCursorVisibility();
 }
 
 function showChromeTemporarily() {
@@ -429,6 +473,7 @@ function showChromeTemporarily() {
     if (settingsPanel.hidden && images.length) {
       slideshowChrome.classList.add("hidden");
     }
+    updateMouseCursorVisibility();
   }, 2600);
 }
 
@@ -501,7 +546,7 @@ function updateOfflinePanel() {
   }
 }
 
-document.addEventListener("fullscreenchange", updateFullscreenButton);
+document.addEventListener("fullscreenchange", updateFullscreenState);
 
 async function postPlaybackSettings(update) {
   if (mode === "offline") {
@@ -570,10 +615,12 @@ function showModal(html, bind) {
   return new Promise(resolve => {
     offlineModal.innerHTML = `<section class="modal-card">${html}</section>`;
     offlineModal.hidden = false;
+    updateMouseCursorVisibility();
     const card = offlineModal.querySelector(".modal-card");
     const close = value => {
       offlineModal.hidden = true;
       offlineModal.innerHTML = "";
+      updateMouseCursorVisibility();
       resolve(value);
     };
     offlineModal.querySelectorAll("[data-cancel]").forEach(button => {
@@ -717,6 +764,7 @@ function showProgressModal(title, message) {
     </section>
   `;
   offlineModal.hidden = false;
+  updateMouseCursorVisibility();
   return {
     update(progress) {
       const percent = progress.total ? Math.round((progress.completed / progress.total) * 100) : 0;
@@ -727,6 +775,7 @@ function showProgressModal(title, message) {
     close() {
       offlineModal.hidden = true;
       offlineModal.innerHTML = "";
+      updateMouseCursorVisibility();
     }
   };
 }
@@ -740,8 +789,9 @@ async function saveCurrentOffline() {
   let nextState;
   let imageList;
   try {
-    nextState = await fetchJson("/api/state");
-    imageList = await fetchJson("/api/images?shuffle=false");
+    const source = await fetchJson("/api/offline-source");
+    nextState = source.state;
+    imageList = source.images || [];
   } catch {
     await messageModal("Server unavailable", "Reconnect to Slide Show before saving an offline copy.");
     return;
@@ -761,9 +811,18 @@ async function saveCurrentOffline() {
     }
   }
 
-  const pin = await promptOptionalPin();
-  if (pin === null) {
-    return;
+  let pin = "";
+  let protectionKey = null;
+  if (plan.existing?.protectionMode === "pin") {
+    protectionKey = await unlockCatalogKey(plan.existing);
+    if (!protectionKey) {
+      return;
+    }
+  } else {
+    pin = await promptOptionalPin();
+    if (pin === null) {
+      return;
+    }
   }
 
   const progress = showProgressModal("Saving offline", "Encrypting images on this device.");
@@ -772,12 +831,13 @@ async function saveCurrentOffline() {
       state: nextState,
       imageList,
       pin,
+      protectionKey,
       replaceCatalogId,
       onProgress: value => progress.update(value)
     });
     progress.close();
     showTapFeedback("Saved", "center");
-    await messageModal("Saved offline", `${catalog.displayName} is ready for encrypted offline playback.`);
+    await messageModal(plan.existing ? "Updated offline" : "Saved offline", `${catalog.displayName} is ready for encrypted offline playback.`);
     updateOfflinePanel();
   } catch (error) {
     progress.close();
@@ -809,34 +869,6 @@ async function unlockCatalogKey(catalog) {
   return key;
 }
 
-async function openOfflineCatalog(catalog) {
-  const key = await unlockCatalogKey(catalog);
-  if (!key) {
-    return;
-  }
-
-  const records = await getImagesForCatalog(catalog.id);
-  if (!records.length) {
-    await messageModal("No saved images", "This catalog has no playable offline images.");
-    return;
-  }
-
-  clearInterval(refreshTimer);
-  stopViewerHeartbeat();
-  mode = "offline";
-  activeOfflineCatalog = catalog;
-  offlineSession = { key };
-  state = {
-    ...catalog,
-    canConfigure: false
-  };
-  images = records.sort(() => Math.random() - 0.5);
-  index = 0;
-  playing = true;
-  await render();
-  showChromeTemporarily();
-}
-
 async function showOfflineStartup() {
   mode = "offline";
   state = {
@@ -858,6 +890,122 @@ async function showOfflineStartup() {
   }
 }
 
+async function fetchRefreshSourceForCatalog(catalog, showErrors) {
+  let nextState;
+  let imageList;
+  try {
+    const source = await fetchJson("/api/offline-source");
+    nextState = source.state;
+    imageList = source.images || [];
+  } catch {
+    if (showErrors) {
+      await messageModal("Server unavailable", "Reconnect to Slide Show before refreshing this offline copy.");
+    }
+    return null;
+  }
+
+  if (!imageList.length) {
+    if (showErrors) {
+      await messageModal("No images", "Choose a folder with images before refreshing this offline copy.");
+    }
+    return null;
+  }
+
+  const plan = await getSyncPlan(nextState);
+  if (plan.existing?.id !== catalog.id) {
+    if (showErrors) {
+      await messageModal("Different folder", "Select this slideshow folder on the PC before refreshing its offline copy.");
+    }
+    return null;
+  }
+
+  return { nextState, imageList };
+}
+
+async function refreshOfflineCatalog(catalog, options = {}) {
+  const showErrors = options.showErrors !== false;
+  const source = await fetchRefreshSourceForCatalog(catalog, showErrors);
+  if (!source) {
+    return { catalog, records: options.records || await getImagesForCatalog(catalog.id), refreshed: false };
+  }
+
+  const records = options.records || await getImagesForCatalog(catalog.id);
+  if (offlineRecordsMatchSource(records, source.imageList)) {
+    const nextCatalog = getCatalogMetadataUpdate(catalog, source.nextState);
+    if (catalogMetadataChanged(catalog, nextCatalog)) {
+      await updateCatalog(nextCatalog);
+      return { catalog: nextCatalog, records, refreshed: false };
+    }
+    return { catalog, records, refreshed: false };
+  }
+
+  const protectionKey = options.protectionKey || await unlockCatalogKey(catalog);
+  if (!protectionKey) {
+    return { catalog, records, refreshed: false };
+  }
+
+  const progress = showProgressModal("Refreshing offline", "Updating the encrypted images on this device.");
+  try {
+    const nextCatalog = await syncCatalog({
+      state: source.nextState,
+      imageList: source.imageList,
+      pin: "",
+      protectionKey,
+      onProgress: value => progress.update(value)
+    });
+    const nextRecords = await getImagesForCatalog(nextCatalog.id);
+    progress.close();
+    showTapFeedback("Refreshed", "center");
+    return { catalog: nextCatalog, records: nextRecords, refreshed: true };
+  } catch (error) {
+    progress.close();
+    if (showErrors) {
+      await messageModal("Refresh failed", error.message || "The offline copy could not be refreshed.");
+    }
+    return { catalog, records, refreshed: false };
+  }
+}
+
+async function openOfflineCatalog(catalog) {
+  const key = await unlockCatalogKey(catalog);
+  if (!key) {
+    return;
+  }
+
+  let records = await getImagesForCatalog(catalog.id);
+  if (!records.length) {
+    await messageModal("No saved images", "This catalog has no playable offline images.");
+    return;
+  }
+
+  const refreshResult = await refreshOfflineCatalog(catalog, {
+    protectionKey: key,
+    records,
+    showErrors: false
+  });
+  catalog = refreshResult.catalog;
+  records = refreshResult.records;
+  if (!records.length) {
+    await messageModal("No saved images", "This catalog has no playable offline images.");
+    return;
+  }
+
+  clearInterval(refreshTimer);
+  stopViewerHeartbeat();
+  mode = "offline";
+  activeOfflineCatalog = catalog;
+  offlineSession = { key };
+  state = {
+    ...catalog,
+    canConfigure: false
+  };
+  images = records.sort(() => Math.random() - 0.5);
+  index = 0;
+  playing = true;
+  await render();
+  showChromeTemporarily();
+}
+
 async function showOfflineLibrary() {
   if (!isCryptoAvailable()) {
     await messageModal("HTTPS required", "Open the HTTPS slideshow link before using encrypted offline playback.");
@@ -874,15 +1022,20 @@ async function showOfflineLibrary() {
   const storageText = storage?.usage && storage?.quota
     ? `Storage used: ${formatBytes(storage.usage)} of ${formatBytes(storage.quota)}.`
     : "Encrypted copies are stored in this browser.";
+  const currentFolderIdentity = mode === "online" && state
+    ? folderIdentityFor(makeServerKey(), state)
+    : null;
 
   const items = catalogs.map(catalog => {
     const protection = catalog.protectionMode === "pin" ? "PIN protected" : "local key";
+    const canRefresh = currentFolderIdentity && catalog.folderIdentity === currentFolderIdentity;
     return `
       <article class="catalog-card">
         <strong>${escapeHtml(catalog.displayName)}</strong>
         <small>${escapeHtml(catalog.imageCount || 0)} images - ${escapeHtml(protection)} - ${escapeHtml(formatBytes(catalog.sizeBytes))} - ${escapeHtml(formatDate(catalog.syncedAt))}</small>
         <div class="catalog-actions">
           <button class="primary" data-open="${escapeHtml(catalog.id)}" type="button">Play</button>
+          ${canRefresh ? `<button data-refresh="${escapeHtml(catalog.id)}" type="button">Refresh</button>` : ""}
           <button data-rename="${escapeHtml(catalog.id)}" type="button">Rename</button>
           <button data-pin="${escapeHtml(catalog.id)}" type="button">${catalog.protectionMode === "pin" ? "Change PIN" : "Set PIN"}</button>
           <button class="danger" data-delete="${escapeHtml(catalog.id)}" type="button">Delete</button>
@@ -904,6 +1057,17 @@ async function showOfflineLibrary() {
       button.addEventListener("click", async () => {
         close(true);
         await openOfflineCatalog(byId(button.dataset.open));
+      });
+    });
+    card.querySelectorAll("[data-refresh]").forEach(button => {
+      button.addEventListener("click", async () => {
+        close(true);
+        const result = await refreshOfflineCatalog(byId(button.dataset.refresh));
+        if (result.refreshed) {
+          await showOfflineLibrary();
+        } else {
+          showTapFeedback("Current", "center");
+        }
       });
     });
     card.querySelectorAll("[data-rename]").forEach(button => {
@@ -1251,5 +1415,5 @@ document.addEventListener("keydown", event => {
 });
 
 registerServiceWorker();
-updateFullscreenButton();
+updateFullscreenState();
 load();

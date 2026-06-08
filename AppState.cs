@@ -247,6 +247,8 @@ public sealed record StateDto(
 
 public sealed record ImageDto(int Id, string Name, string Url, string CacheKey);
 
+public sealed record OfflineSourceDto(StateDto State, IReadOnlyList<ImageDto> Images);
+
 public sealed class SettingsUpdateDto
 {
     public string? FolderPath { get; set; }

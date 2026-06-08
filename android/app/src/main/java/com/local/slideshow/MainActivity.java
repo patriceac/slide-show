@@ -22,6 +22,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -696,8 +697,9 @@ public class MainActivity extends Activity {
 
         executor.execute(() -> {
             try {
-                JSONObject state = getJson(info.baseUrl() + "/api/state");
-                JSONArray imageList = getJsonArray(info.baseUrl() + "/api/images?shuffle=false");
+                OfflineSource source = getOfflineSource(info);
+                JSONObject state = source.state;
+                JSONArray imageList = source.imageList;
                 if (imageList.length() == 0) {
                     OfflineImageStore.OfflineCatalog cached = cachedFallbackFor(info, state);
                     if (cached != null) {
@@ -820,6 +822,41 @@ public class MainActivity extends Activity {
         return matching != null ? matching : offlineStore.loadLastPlayableCatalog();
     }
 
+    private OfflineSource getOfflineSource(ServerInfo info) throws Exception {
+        try {
+            JSONObject source = getJson(info.baseUrl() + "/api/offline-source");
+            JSONObject state = source.optJSONObject("state");
+            JSONArray imageList = source.optJSONArray("images");
+            if (state != null && imageList != null) {
+                return new OfflineSource(state, imageList);
+            }
+        } catch (Exception ignored) {
+        }
+
+        return new OfflineSource(
+            getJson(info.baseUrl() + "/api/state"),
+            getJsonArray(info.baseUrl() + "/api/images?shuffle=false"));
+    }
+
+    private ServerInfo serverInfoForCatalog(OfflineImageStore.OfflineCatalog catalog) {
+        if (catalog == null || catalog.serverKey == null || catalog.serverKey.trim().isEmpty()) {
+            return null;
+        }
+
+        int separator = catalog.serverKey.lastIndexOf(':');
+        if (separator <= 0 || separator >= catalog.serverKey.length() - 1) {
+            return null;
+        }
+
+        try {
+            String host = catalog.serverKey.substring(0, separator);
+            int port = Integer.parseInt(catalog.serverKey.substring(separator + 1));
+            return new ServerInfo(catalog.serverName, host, port);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
     private void showServerEmptyState(JSONObject state) {
         List<OfflineImageStore.OfflineCatalog> catalogs = offlineStore.loadCatalogs();
         String message = cleanString(state.optString("scanMessage", ""), "The selected folder does not have any images.");
@@ -907,9 +944,67 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            beforeOpen.run();
-            showSlideshow(null, current, true, this::showOfflineCatalogLaunchScreen);
+            refreshOfflineCatalogBeforeOpen(current, beforeOpen);
         }, onCanceled);
+    }
+
+    private void refreshOfflineCatalogBeforeOpen(OfflineImageStore.OfflineCatalog catalog, Runnable beforeOpen) {
+        ServerInfo info = serverInfoForCatalog(catalog);
+        if (info == null || syncInProgress) {
+            openUnlockedOfflineCatalog(catalog, beforeOpen);
+            return;
+        }
+
+        syncInProgress = true;
+        executor.execute(() -> {
+            OfflineImageStore.OfflineCatalog current = catalog;
+            try {
+                OfflineSource source = getOfflineSource(info);
+                if (source.imageList.length() > 0 && offlineStore.chooseSlotForSync(info.key(), source.state) == catalog.slotId) {
+                    OfflineImageStore.OfflineCatalog latest = reloadCatalog(catalog);
+                    if (offlineStore.catalogMatchesSource(latest, info.key(), source.imageList) && latest.usesCurrentImageFormat()) {
+                        if (!offlineStore.catalogMatchesMetadata(latest, info.key(), source.state)) {
+                            OfflineImageStore.OfflineCatalog updated = offlineStore.updateCatalogMetadata(latest.slotId, info.key(), info.name, source.state);
+                            if (updated != null) {
+                                current = updated;
+                            }
+                        } else {
+                            current = latest;
+                        }
+                    } else {
+                        int syncWorkers = Math.max(2, Math.min(4, source.state.optInt("syncWorkers", 4)));
+                        long syncUiStartedAt = SystemClock.elapsedRealtime();
+                        handler.post(() -> showSyncStatus(source.state, 0, source.imageList.length(), syncUiStartedAt));
+                        current = offlineStore.sync(
+                            latest.slotId,
+                            info.key(),
+                            info.name,
+                            info.baseUrl(),
+                            source.state,
+                            source.imageList,
+                            syncWorkers,
+                            (completed, total, name) -> handler.post(() -> showSyncStatus(source.state, completed, total, syncUiStartedAt)));
+                    }
+                }
+            } catch (Exception ignored) {
+            } finally {
+                syncInProgress = false;
+            }
+
+            OfflineImageStore.OfflineCatalog catalogToOpen = current;
+            handler.post(() -> openUnlockedOfflineCatalog(catalogToOpen, beforeOpen));
+        });
+    }
+
+    private void openUnlockedOfflineCatalog(OfflineImageStore.OfflineCatalog catalog, Runnable beforeOpen) {
+        OfflineImageStore.OfflineCatalog current = reloadCatalog(catalog);
+        if (current.images.isEmpty()) {
+            showSavedSlideshowUnavailable(current);
+            return;
+        }
+
+        beforeOpen.run();
+        showSlideshow(null, current, true, this::showOfflineCatalogLaunchScreen);
     }
 
     private void showSavedSlideshowUnavailable(OfflineImageStore.OfflineCatalog catalog) {
@@ -967,6 +1062,7 @@ public class MainActivity extends Activity {
 
         dialog.setOnShowListener(d -> {
             Button unlock = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            focusPinInput(dialog, input);
             unlock.setOnClickListener(v -> {
                 OfflineImageStore.OfflineCatalog current = reloadCatalog(catalog);
                 if (offlineStore.verifyCatalogPin(current, input.getText().toString())) {
@@ -1018,6 +1114,7 @@ public class MainActivity extends Activity {
 
         dialog.setOnShowListener(d -> {
             Button save = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            focusPinInput(dialog, pin);
             save.setOnClickListener(v -> {
                 String nextPin = pin.getText().toString().trim();
                 if (nextPin.length() < 4) {
@@ -1065,6 +1162,20 @@ public class MainActivity extends Activity {
             }
         } catch (Exception ignored) {
         }
+    }
+
+    private void focusPinInput(AlertDialog dialog, EditText input) {
+        input.requestFocus();
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+        }
+        input.post(() -> {
+            InputMethodManager keyboard = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (keyboard != null) {
+                keyboard.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT);
+            }
+        });
     }
 
     private EditText pinInput() {
@@ -1951,14 +2062,28 @@ public class MainActivity extends Activity {
         OfflineImageStore.OfflineCatalog catalog = activeCatalog;
         executor.execute(() -> {
             try {
-                JSONObject state = getJson(info.baseUrl() + "/api/state");
+                OfflineSource source = getOfflineSource(info);
+                JSONObject state = source.state;
+                JSONArray imageList = source.imageList;
                 String nextIdentity = OfflineImageStore.folderIdentityFor(info.key(), state);
-                long nextVersion = state.optLong("version", 0);
-                if (catalog != null && nextIdentity.equals(catalog.folderIdentity) && nextVersion == catalog.serverVersion && catalog.usesCurrentImageFormat()) {
+                if (catalog != null &&
+                    nextIdentity.equals(catalog.folderIdentity) &&
+                    catalog.usesCurrentImageFormat() &&
+                    offlineStore.catalogMatchesSource(catalog, info.key(), imageList)) {
+                    if (!offlineStore.catalogMatchesMetadata(catalog, info.key(), state)) {
+                        OfflineImageStore.OfflineCatalog updated = offlineStore.updateCatalogMetadata(catalog.slotId, info.key(), info.name, state);
+                        if (updated != null) {
+                            handler.post(() -> {
+                                if (activeCatalog != null && activeCatalog.slotId == updated.slotId) {
+                                    activeCatalog = updated;
+                                    restoreActiveHeader();
+                                }
+                            });
+                        }
+                    }
                     return;
                 }
 
-                JSONArray imageList = getJsonArray(info.baseUrl() + "/api/images?shuffle=false");
                 int syncWorkers = Math.max(2, Math.min(4, state.optInt("syncWorkers", 4)));
                 int slotId = offlineStore.chooseSlotForSync(info.key(), state);
                 if (slotId == 0 && catalog != null && !activeOffline) {
@@ -2192,6 +2317,16 @@ public class MainActivity extends Activity {
 
         String baseUrl() {
             return "http://" + host + ":" + port;
+        }
+    }
+
+    private static final class OfflineSource {
+        final JSONObject state;
+        final JSONArray imageList;
+
+        OfflineSource(JSONObject state, JSONArray imageList) {
+            this.state = state;
+            this.imageList = imageList == null ? new JSONArray() : imageList;
         }
     }
 

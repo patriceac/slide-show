@@ -159,6 +159,13 @@ public sealed class AppWebServer : IAsyncDisposable
             var shuffle = !string.Equals(context.Request.Query["shuffle"], "false", StringComparison.OrdinalIgnoreCase);
             return Results.Json(_state.GetImages(shuffle));
         });
+        app.MapGet("/api/offline-source", (HttpContext context) =>
+        {
+            _state.Rescan();
+            var state = _state.GetSnapshot(IsLocalRequest(context));
+            var images = _state.GetImages(shuffle: false);
+            return Results.Json(new OfflineSourceDto(state, images));
+        });
 
         app.MapGet("/image/{id:int}", (HttpContext context, int id) =>
         {

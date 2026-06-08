@@ -39,6 +39,7 @@ export async function syncCatalog({
   state,
   imageList,
   pin,
+  protectionKey,
   replaceCatalogId,
   onProgress
 }) {
@@ -48,14 +49,25 @@ export async function syncCatalog({
 
   const plan = await getSyncPlan(state);
   const targetId = replaceCatalogId || plan.existing?.id || crypto.randomUUID();
-  const hasPin = Boolean(pin && pin.trim());
+  const preserveExistingProtection = Boolean(protectionKey && plan.existing);
+  const preserveExistingPin = preserveExistingProtection && plan.existing.protectionMode === "pin";
+  const hasPin = preserveExistingPin || Boolean(pin && pin.trim());
   let key;
   let localKey = null;
   let salt = "";
   let verifierData = "";
   let verifierIv = "";
 
-  if (hasPin) {
+  if (preserveExistingProtection) {
+    key = protectionKey;
+    if (preserveExistingPin) {
+      salt = plan.existing.salt || "";
+      verifierData = plan.existing.verifierData || "";
+      verifierIv = plan.existing.verifierIv || "";
+    } else {
+      localKey = protectionKey;
+    }
+  } else if (hasPin) {
     salt = bytesToBase64(randomBytes(16));
     key = await derivePinKey(pin.trim(), salt, PIN_ITERATIONS);
     const verifier = await createPinVerifier(key);
@@ -126,8 +138,8 @@ export async function syncCatalog({
     syncedAt: now,
     protectionMode: hasPin ? "pin" : "local",
     salt,
-    kdf: hasPin ? "PBKDF2-SHA-256" : "",
-    iterations: hasPin ? PIN_ITERATIONS : 0,
+    kdf: hasPin ? plan.existing?.kdf || "PBKDF2-SHA-256" : "",
+    iterations: hasPin ? plan.existing?.iterations || PIN_ITERATIONS : 0,
     verifierData,
     verifierIv
   };
