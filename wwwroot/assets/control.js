@@ -1,11 +1,19 @@
+import { isCryptoAvailable } from "./offline-crypto.js?v=20260529-offline2";
+import { listCatalogs } from "./offline-store.js?v=20260529-offline2";
+
 const fields = {
   statusPill: document.querySelector("#statusPill"),
   openShow: document.querySelector("#openShow"),
+  openLibrary: document.querySelector("#openLibrary"),
+  playCurrent: document.querySelector("#playCurrent"),
   chooseFolder: document.querySelector("#chooseFolder"),
+  currentSlideshowName: document.querySelector("#currentSlideshowName"),
+  currentFolderDetail: document.querySelector("#currentFolderDetail"),
   folderPath: document.querySelector("#folderPath"),
   imageCount: document.querySelector("#imageCount"),
   lastScan: document.querySelector("#lastScan"),
   scanMessage: document.querySelector("#scanMessage"),
+  libraryList: document.querySelector("#libraryList"),
   saveSettings: document.querySelector("#saveSettings"),
   rescan: document.querySelector("#rescan"),
   slideSeconds: document.querySelector("#slideSeconds"),
@@ -59,10 +67,70 @@ function formatScanTime(value) {
   }).format(new Date(value));
 }
 
+function formatRecentTime(value) {
+  if (!value) {
+    return "Last used recently";
+  }
+
+  return `Last used ${new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    month: "short",
+    day: "numeric"
+  }).format(new Date(value))}`;
+}
+
+function formatBytes(bytes) {
+  if (!bytes) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+function formatCatalogDate(value) {
+  if (!value) {
+    return "not synced";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    month: "short",
+    day: "numeric"
+  }).format(new Date(value));
+}
+
+function folderNameFromPath(value) {
+  const trimmed = normalizeFolderPath(value).replace(/[\\/]+$/, "");
+  if (!trimmed) {
+    return "";
+  }
+
+  const parts = trimmed.split(/[\\/]+/);
+  return parts[parts.length - 1] || trimmed;
+}
+
 function render(state) {
   currentState = state;
+  const hasFolder = Boolean(normalizeFolderPath(state.folderPath));
+  const slideshowName = state.folderName || folderNameFromPath(state.folderPath) || "No slideshow selected";
   fields.statusPill.textContent = "Running";
   fields.openShow.href = state.localSlideshowUrl || "/show";
+  fields.openShow.classList.toggle("is-disabled", !hasFolder);
+  fields.openShow.setAttribute("aria-disabled", String(!hasFolder));
+  fields.playCurrent.disabled = !hasFolder;
+  fields.currentSlideshowName.textContent = slideshowName;
+  fields.currentFolderDetail.textContent = hasFolder
+    ? "This is the slideshow that will play on desktop."
+    : "Choose an image folder to begin.";
   fields.folderPath.value = state.folderPath || "";
   fields.imageCount.textContent = state.imageCount.toLocaleString();
   fields.lastScan.textContent = formatScanTime(state.lastScannedAt);
@@ -84,7 +152,93 @@ function render(state) {
     fields.footerShowUrl.href = showUrl || "/show";
     fields.footerShowUrl.textContent = showUrl || "/show";
   }
+  renderLibraries(state);
   setSavePending(false);
+}
+
+async function getOfflineCatalogs() {
+  if (!isCryptoAvailable()) {
+    return [];
+  }
+
+  try {
+    return await listCatalogs();
+  } catch {
+    return [];
+  }
+}
+
+async function renderLibraries(state) {
+  fields.libraryList.replaceChildren();
+  const currentPath = normalizeFolderPath(state.folderPath).toLowerCase();
+  const recent = Array.isArray(state.recentSlideshows)
+    ? state.recentSlideshows.filter(slideshow => normalizeFolderPath(slideshow.folderPath))
+    : [];
+  const offlineCatalogs = await getOfflineCatalogs();
+
+  if (currentState !== state) {
+    return;
+  }
+
+  if (recent.length === 0 && offlineCatalogs.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "library-empty";
+    empty.textContent = "Libraries will appear here after you choose or save a slideshow.";
+    fields.libraryList.append(empty);
+    return;
+  }
+
+  recent.slice(0, 4).forEach(slideshow => {
+    const folderPath = normalizeFolderPath(slideshow.folderPath);
+    const isCurrent = currentPath && folderPath.toLowerCase() === currentPath;
+    const row = document.createElement("article");
+    row.className = `library-row${isCurrent ? " is-current" : ""}`;
+
+    const details = document.createElement("div");
+    const title = document.createElement("h4");
+    title.textContent = slideshow.folderName || folderNameFromPath(folderPath) || "Slideshow";
+    const meta = document.createElement("p");
+    meta.textContent = `${isCurrent ? "Current - " : ""}${formatRecentTime(slideshow.lastUsedAt)} - ${folderPath}`;
+    details.append(title, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "library-actions";
+
+    const playButton = document.createElement("button");
+    playButton.type = "button";
+    playButton.className = "primary-button";
+    playButton.textContent = isCurrent && state.imageCount === 0 ? "Retry" : "Play";
+    playButton.addEventListener("click", () => selectRecentSlideshow(folderPath, true));
+    actions.append(playButton);
+
+    row.append(details, actions);
+    fields.libraryList.append(row);
+  });
+
+  offlineCatalogs.slice(0, 4).forEach(catalog => {
+    const row = document.createElement("article");
+    row.className = "library-row";
+
+    const details = document.createElement("div");
+    const title = document.createElement("h4");
+    title.textContent = catalog.displayName || "Offline slideshow";
+    const meta = document.createElement("p");
+    const protection = catalog.protectionMode === "pin" ? "PIN protected" : "local key";
+    meta.textContent = `${catalog.imageCount || 0} images - ${protection} - ${formatBytes(catalog.sizeBytes)} - ${formatCatalogDate(catalog.syncedAt)}`;
+    details.append(title, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "library-actions";
+    const playButton = document.createElement("button");
+    playButton.type = "button";
+    playButton.className = "primary-button";
+    playButton.textContent = "Play";
+    playButton.addEventListener("click", () => openOfflineSlideshow(catalog.id));
+    actions.append(playButton);
+
+    row.append(details, actions);
+    fields.libraryList.append(row);
+  });
 }
 
 function getImageMode() {
@@ -100,7 +254,6 @@ function setImageMode(value) {
 
 function getSettingsPayload() {
   return {
-    folderPath: fields.folderPath.value,
     includeSubfolders: fields.includeSubfolders.checked,
     slideSeconds: Number(fields.slideSeconds.value),
     syncWorkers: Number(fields.syncWorkers.value),
@@ -131,7 +284,6 @@ function markUnsavedChanges() {
   if (currentState) {
     const payload = getSettingsPayload();
     setSavePending(
-      normalizeFolderPath(payload.folderPath) !== (currentState.folderPath || "") ||
       payload.includeSubfolders !== currentState.includeSubfolders ||
       payload.slideSeconds !== currentState.slideSeconds ||
       payload.syncWorkers !== (currentState.syncWorkers || 4) ||
@@ -171,12 +323,12 @@ function createSlideshowOverlay() {
   return overlay;
 }
 
-function mountSlideshowFrame() {
+function mountSlideshowFrame(url = fields.openShow.href || "/show") {
   if (!slideshowOverlay || slideshowOverlay.querySelector("iframe")) {
     return;
   }
 
-  const source = new URL(fields.openShow.href || "/show", window.location.href);
+  const source = new URL(url, window.location.href);
   source.searchParams.set("embed", "1");
 
   const frame = document.createElement("iframe");
@@ -186,7 +338,7 @@ function mountSlideshowFrame() {
   slideshowOverlay.append(frame);
 }
 
-async function openSlideshowFullscreen() {
+async function openSlideshowFullscreen(url) {
   const overlay = createSlideshowOverlay();
 
   if (!overlay.requestFullscreen) {
@@ -196,7 +348,7 @@ async function openSlideshowFullscreen() {
 
   try {
     await overlay.requestFullscreen({ navigationUI: "hide" });
-    mountSlideshowFrame();
+    mountSlideshowFrame(url);
     return true;
   } catch {
     removeSlideshowOverlay();
@@ -211,16 +363,13 @@ async function openNativeSlideshowWindow() {
   }
 }
 
-document.addEventListener("fullscreenchange", () => {
-  if (!document.fullscreenElement) {
-    removeSlideshowOverlay();
+async function openCurrentSlideshow() {
+  if (!currentState?.folderPath) {
+    showToast("Choose a slideshow first");
+    return;
   }
-});
 
-fields.openShow.addEventListener("click", async event => {
-  event.preventDefault();
-
-  if (await openSlideshowFullscreen()) {
+  if (await openSlideshowFullscreen(fields.openShow.href || "/show")) {
     return;
   }
 
@@ -229,7 +378,88 @@ fields.openShow.addEventListener("click", async event => {
   } catch {
     window.location.href = fields.openShow.href || "/show";
   }
+}
+
+async function openStageLibrary() {
+  if (await openSlideshowFullscreen("/show")) {
+    return;
+  }
+
+  window.location.href = "/show";
+}
+
+async function openOfflineSlideshow(catalogId) {
+  if (!catalogId) {
+    return;
+  }
+
+  const url = `/show?offlineCatalog=${encodeURIComponent(catalogId)}`;
+  if (await openSlideshowFullscreen(url)) {
+    return;
+  }
+
+  window.location.href = url;
+}
+
+function setRecentControlsDisabled(disabled) {
+  fields.libraryList.querySelectorAll("button").forEach(button => {
+    button.disabled = disabled;
+  });
+}
+
+async function selectRecentSlideshow(folderPath, playAfter) {
+  const selectedPath = normalizeFolderPath(folderPath);
+  if (!selectedPath) {
+    return;
+  }
+
+  if (selectedPath.toLowerCase() === normalizeFolderPath(currentState?.folderPath).toLowerCase()) {
+    if (playAfter) {
+      if (currentState.imageCount === 0) {
+        const state = await api("/api/rescan", { method: "POST" });
+        render(state);
+        if (state.imageCount === 0) {
+          showToast(state.scanMessage || "Slideshow unavailable");
+          return;
+        }
+      }
+      await openCurrentSlideshow();
+    }
+    return;
+  }
+
+  setRecentControlsDisabled(true);
+  try {
+    const state = await api("/api/settings", {
+      method: "POST",
+      body: JSON.stringify({ folderPath: selectedPath })
+    });
+    render(state);
+    showToast("Slideshow selected");
+    if (playAfter) {
+      await openCurrentSlideshow();
+    }
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    setRecentControlsDisabled(false);
+  }
+}
+
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement) {
+    removeSlideshowOverlay();
+  }
 });
+
+fields.openShow.addEventListener("click", async event => {
+  event.preventDefault();
+  await openCurrentSlideshow();
+});
+
+fields.openLibrary.addEventListener("click", openStageLibrary);
+
+fields.playCurrent.addEventListener("click", openCurrentSlideshow);
 
 fields.chooseFolder.addEventListener("click", async () => {
   fields.chooseFolder.disabled = true;
@@ -239,11 +469,11 @@ fields.chooseFolder.addEventListener("click", async () => {
     const state = result.state || result;
     const selected = result.selected ?? normalizeFolderPath(state.folderPath) !== normalizeFolderPath(currentState?.folderPath);
     render(state);
-    showToast(selected ? "Folder selected" : "No folder selected");
+    showToast(selected ? "Slideshow selected" : "No folder selected");
   } catch (error) {
     showToast(error.message);
   } finally {
-    setChooseFolderLabel("Choose folder");
+    setChooseFolderLabel("Switch folder");
     fields.chooseFolder.disabled = false;
   }
 });
@@ -297,7 +527,6 @@ fields.startAtLogin.addEventListener("change", async () => {
 });
 
 [
-  fields.folderPath,
   fields.slideSeconds,
   fields.syncWorkers,
   fields.backgroundColor,

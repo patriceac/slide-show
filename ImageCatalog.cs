@@ -73,7 +73,7 @@ public sealed class ImageCatalog
     public void Scan(AppSettings settings)
     {
         var next = new List<ImageItem>();
-        var message = settings.FolderPath is null ? "Choose an image folder." : null;
+        var message = settings.FolderPath is null ? "Choose a slideshow folder." : null;
 
         try
         {

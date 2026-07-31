@@ -231,6 +231,7 @@ p {
 }
 
 .primary-button:disabled,
+.primary-button.is-disabled,
 .secondary-button:disabled,
 .step-button:disabled {
   cursor: not-allowed;
@@ -254,13 +255,13 @@ p {
 }
 
 .stage-panel {
-  min-height: 470px;
+  min-height: 620px;
   overflow: hidden;
 }
 
 .stage-media {
   position: relative;
-  min-height: 470px;
+  min-height: 620px;
   height: 100%;
   overflow: hidden;
   border-radius: inherit;
@@ -334,7 +335,7 @@ p {
   left: 50%;
   top: 50%;
   z-index: 1;
-  width: min(760px, calc(100% - 72px));
+  width: min(840px, calc(100% - 72px));
   transform: translate(-50%, -50%);
   border: 1px solid rgba(194, 205, 214, 0.26);
   border-radius: var(--radius);
@@ -355,6 +356,17 @@ p {
   font-size: 22px;
   line-height: 1.2;
   font-weight: 650;
+}
+
+.folder-detail {
+  max-width: 560px;
+  margin-top: 8px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .url-field {
@@ -448,6 +460,12 @@ p {
   color: var(--ink);
   padding: 0 14px;
   outline: none;
+}
+
+.field input[readonly] {
+  cursor: text;
+  color: #d9e0e4;
+  background: rgba(5, 7, 10, 0.54);
 }
 
 .field input:focus,
@@ -633,7 +651,8 @@ p {
 }
 
 .source-card .folder-layout {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
 }
 
 .source-card .folder-path-field {
@@ -641,8 +660,19 @@ p {
 }
 
 .source-card .folder-button {
-  justify-self: end;
   margin-top: 0;
+}
+
+.source-actions {
+  display: grid;
+  gap: 10px;
+  justify-items: stretch;
+  min-width: 168px;
+}
+
+.source-play-button,
+.source-actions .secondary-button {
+  width: 100%;
 }
 
 .folder-footer {
@@ -693,6 +723,104 @@ p {
 .button-row {
   justify-content: flex-end;
   gap: 12px;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 28px;
+}
+
+.library-section {
+  margin-top: 22px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(162, 177, 186, 0.18);
+}
+
+.library-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.library-heading h3 {
+  margin: 0;
+  color: #edf4ef;
+  font-size: 15px;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.library-heading .secondary-button {
+  min-height: 40px;
+  padding: 0 14px;
+}
+
+.library-list {
+  display: grid;
+  gap: 10px;
+}
+
+.library-empty,
+.library-row {
+  border: 1px solid rgba(148, 163, 172, 0.16);
+  border-radius: var(--radius);
+  background: rgba(6, 9, 13, 0.48);
+}
+
+.library-empty {
+  padding: 13px 14px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.library-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+}
+
+.library-row.is-current {
+  border-color: rgba(79, 209, 132, 0.38);
+  background: rgba(79, 209, 132, 0.09);
+}
+
+.library-row h4 {
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-row p {
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.library-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.library-actions .primary-button,
+.library-actions .secondary-button {
+  min-height: 44px;
+  padding: 0 15px;
+  font-size: 14px;
 }
 
 .server-footer {
@@ -828,12 +956,26 @@ p {
 
   .stage-panel,
   .stage-media {
-    min-height: 520px;
+    min-height: 0;
+  }
+
+  .stage-media {
+    height: auto;
+    padding: 86px 14px 26px;
   }
 
   .source-card {
-    width: calc(100% - 28px);
+    position: relative;
+    left: auto;
+    top: auto;
+    width: 100%;
+    transform: none;
     padding: 22px;
+  }
+
+  .folder-detail {
+    max-width: 100%;
+    white-space: normal;
   }
 
   .folder-path-field {
@@ -848,8 +990,28 @@ p {
     margin-left: 0;
   }
 
+  .source-card .folder-layout,
+  .library-row {
+    grid-template-columns: 1fr;
+  }
+
   .source-card .folder-button {
     justify-self: stretch;
+  }
+
+  .source-actions,
+  .settings-actions {
+    justify-items: stretch;
+    justify-content: stretch;
+  }
+
+  .library-actions {
+    justify-content: stretch;
+  }
+
+  .library-actions .primary-button,
+  .library-actions .secondary-button {
+    flex: 1 1 0;
   }
 
   .meta-grid {

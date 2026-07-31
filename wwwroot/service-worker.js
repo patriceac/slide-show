@@ -1,9 +1,9 @@
-const CACHE_NAME = "slide-show-shell-20260604-cursor3";
+const CACHE_NAME = "slide-show-shell-20260629-stage-library3";
 const SHELL_URLS = [
   "/show",
   "/manifest.webmanifest",
-  "/assets/slideshow.css?v=20260604-cursor3",
-  "/assets/slideshow.js?v=20260604-cursor3",
+  "/assets/slideshow.css?v=20260629-stage-library3",
+  "/assets/slideshow.js?v=20260629-stage-library3",
   "/assets/offline-crypto.js?v=20260529-offline2",
   "/assets/offline-store.js?v=20260529-offline2",
   "/assets/offline-sync.js?v=20260603-auto-refresh",

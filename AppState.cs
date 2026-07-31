@@ -17,6 +17,10 @@ public sealed class AppState
         _settingsStore = settingsStore;
         _viewerActivity = viewerActivity;
         _settings = settingsStore.Load();
+        if (RememberCurrentSlideshow(_settings))
+        {
+            _settingsStore.Save(_settings);
+        }
     }
 
     public int Port
@@ -98,7 +102,8 @@ public sealed class AppState
             $"{httpsDisplayUrl}/show",
             httpsLanUrls.Select(url => $"{url}/show").ToArray(),
             $"{displayUrl}/certificate.cer",
-            $"{httpsDisplayUrl}/certificate.cer");
+            $"{httpsDisplayUrl}/certificate.cer",
+            settings.RecentSlideshows.Select(ToDto).ToArray());
     }
 
     public IReadOnlyList<ImageDto> GetImages(bool shuffle)
@@ -171,6 +176,10 @@ public sealed class AppState
             }
 
             _settings.Normalize();
+            if (update.FolderPath is not null)
+            {
+                RememberCurrentSlideshow(_settings);
+            }
             _settingsStore.Save(_settings);
         }
 
@@ -200,6 +209,43 @@ public sealed class AppState
             _settingsStore.Save(_settings);
         }
     }
+
+    private static bool RememberCurrentSlideshow(AppSettings settings)
+    {
+        if (string.IsNullOrWhiteSpace(settings.FolderPath))
+        {
+            return false;
+        }
+
+        settings.Normalize();
+        var folderPath = settings.FolderPath;
+        var existing = settings.RecentSlideshows
+            .FirstOrDefault(slideshow => string.Equals(slideshow.FolderPath, folderPath, StringComparison.OrdinalIgnoreCase));
+        var now = DateTimeOffset.UtcNow;
+
+        if (existing is not null)
+        {
+            existing.FolderName = RecentSlideshow.DisplayNameFor(folderPath);
+            existing.LastUsedAt = now;
+        }
+        else
+        {
+            settings.RecentSlideshows.Insert(0, new RecentSlideshow
+            {
+                FolderPath = folderPath,
+                FolderName = RecentSlideshow.DisplayNameFor(folderPath),
+                LastUsedAt = now
+            });
+        }
+
+        settings.Normalize();
+        return true;
+    }
+
+    private static RecentSlideshowDto ToDto(RecentSlideshow slideshow) => new(
+        slideshow.FolderPath,
+        slideshow.FolderName ?? RecentSlideshow.DisplayNameFor(slideshow.FolderPath),
+        slideshow.LastUsedAt);
 
     private static IEnumerable<string> GetLanAddresses()
     {
@@ -243,7 +289,10 @@ public sealed record StateDto(
     string HttpsDisplaySlideshowUrl,
     string[] HttpsLanSlideshowUrls,
     string CertificateUrl,
-    string HttpsCertificateUrl);
+    string HttpsCertificateUrl,
+    RecentSlideshowDto[] RecentSlideshows);
+
+public sealed record RecentSlideshowDto(string FolderPath, string FolderName, DateTimeOffset LastUsedAt);
 
 public sealed record ImageDto(int Id, string Name, string Url, string CacheKey);
 

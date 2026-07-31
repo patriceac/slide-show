@@ -18,10 +18,12 @@ import android.text.TextUtils;
 import android.text.InputType;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.EditText;
@@ -1049,6 +1051,7 @@ public class MainActivity extends Activity {
     private void showPinUnlockDialog(OfflineImageStore.OfflineCatalog catalog, Runnable onUnlocked, Runnable onCanceled) {
         EditText input = pinInput();
         input.setHint("PIN");
+        input.setImeOptions(EditorInfo.IME_ACTION_DONE);
         boolean[] unlocked = new boolean[] { false };
         boolean[] canceled = new boolean[] { false };
 
@@ -1074,6 +1077,17 @@ public class MainActivity extends Activity {
                     input.setError("Wrong PIN");
                     input.selectAll();
                 }
+            });
+            input.setOnEditorActionListener((view, actionId, event) -> {
+                boolean doneAction = actionId == EditorInfo.IME_ACTION_DONE;
+                boolean enterRelease = event != null
+                    && event.getKeyCode() == KeyEvent.KEYCODE_ENTER
+                    && event.getAction() == KeyEvent.ACTION_UP;
+                if (doneAction || enterRelease) {
+                    unlock.performClick();
+                    return true;
+                }
+                return false;
             });
         });
         dialog.setOnCancelListener(d -> {

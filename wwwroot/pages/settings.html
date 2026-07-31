@@ -7,7 +7,7 @@
   <title>Slide Show</title>
   <link rel="icon" href="/assets/darkroom-stage.png">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="stylesheet" href="/assets/styles.css?v=20260529-kiosk">
+  <link rel="stylesheet" href="/assets/styles.css?v=20260629-landing-libraries">
 </head>
 <body class="settings-page">
   <main class="shell">
@@ -31,11 +31,9 @@
           Running
         </span>
         <a id="openShow" class="primary-button hero-action" href="/show">
-          <span>Open slideshow</span>
+          <span>Play current</span>
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M14 4h6v6"></path>
-            <path d="M10 14 20 4"></path>
-            <path d="M20 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4"></path>
+            <path d="m8 5 11 7-11 7z"></path>
           </svg>
         </a>
       </div>
@@ -54,7 +52,7 @@
             <span id="stageTitle">Slideshow stage</span>
           </div>
 
-          <section class="source-card" aria-labelledby="folderTitle">
+          <section class="source-card" aria-labelledby="currentSlideshowName">
             <div class="folder-layout">
               <div class="folder-main">
                 <div class="panel-heading">
@@ -64,21 +62,30 @@
                     </svg>
                   </span>
                   <div>
-                    <p class="eyebrow">Image folder</p>
-                    <h2 id="folderTitle">Image folder</h2>
+                    <p class="eyebrow">Current slideshow</p>
+                    <h2 id="currentSlideshowName">No slideshow selected</h2>
+                    <p id="currentFolderDetail" class="folder-detail">Choose an image folder to begin.</p>
                   </div>
                 </div>
                 <label class="field folder-path-field">
-                  <span>Folder path</span>
-                  <input id="folderPath" type="text" placeholder="Choose an image folder">
+                  <span>Location</span>
+                  <input id="folderPath" type="text" placeholder="No folder selected" readonly>
                 </label>
               </div>
-              <button id="chooseFolder" class="secondary-button folder-button">
-                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"></path>
-                </svg>
-                <span>Choose folder</span>
-              </button>
+              <div class="source-actions">
+                <button id="playCurrent" class="primary-button source-play-button" type="button">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="m8 5 11 7-11 7z"></path>
+                  </svg>
+                  <span>Play</span>
+                </button>
+                <button id="chooseFolder" class="secondary-button folder-button" type="button">
+                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"></path>
+                  </svg>
+                  <span>Switch folder</span>
+                </button>
+              </div>
             </div>
 
             <div class="folder-footer">
@@ -101,12 +108,6 @@
               </div>
               <p class="state-message" id="scanMessage"></p>
               <div class="button-row">
-                <button id="saveSettings" class="secondary-button save-button">
-                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path d="m5 12 4 4L19 6"></path>
-                  </svg>
-                  <span>Save changes</span>
-                </button>
                 <button id="rescan" class="secondary-button">
                   <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                     <path d="M20 12a8 8 0 0 1-13.7 5.7"></path>
@@ -118,6 +119,14 @@
                 </button>
               </div>
             </div>
+
+            <section class="library-section" aria-labelledby="libraryTitle">
+              <div class="library-heading">
+                <h3 id="libraryTitle">Libraries</h3>
+                <button id="openLibrary" class="secondary-button" type="button">Library</button>
+              </div>
+              <div id="libraryList" class="library-list" aria-live="polite"></div>
+            </section>
           </section>
         </div>
       </section>
@@ -186,6 +195,15 @@
               <small>Include images from subfolders when scanning.</small>
             </span>
           </label>
+
+          <div class="settings-actions">
+            <button id="saveSettings" class="secondary-button save-button">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="m5 12 4 4L19 6"></path>
+              </svg>
+              <span>Save changes</span>
+            </button>
+          </div>
         </section>
 
         <section class="panel system-panel" aria-labelledby="systemTitle">
@@ -228,6 +246,6 @@
     </footer>
   </main>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script src="/assets/control.js?v=20260526-fullscreen"></script>
+  <script type="module" src="/assets/control.js?v=20260629-landing-libraries"></script>
 </body>
 </html>

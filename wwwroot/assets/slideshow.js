@@ -28,10 +28,12 @@ import { getSyncPlan, syncCatalog } from "./offline-sync.js?v=20260603-auto-refr
 const stage = document.querySelector("#stage");
 const image = document.querySelector("#slideImage");
 const emptyState = document.querySelector("#emptyState");
+const emptyOfflineLibrary = document.querySelector("#emptyOfflineLibrary");
 const slideshowChrome = document.querySelector("#chrome");
 const folderName = document.querySelector("#folderName");
 const positionText = document.querySelector("#positionText");
 const fullscreenToggle = document.querySelector("#fullscreenToggle");
+const stageLibrary = document.querySelector("#stageLibrary");
 const settingsToggle = document.querySelector("#settingsToggle");
 const settingsPanel = document.querySelector("#settingsPanel");
 const timerText = document.querySelector("#timerText");
@@ -70,6 +72,34 @@ let activeOfflineCatalog = null;
 let offlineSession = null;
 let currentObjectUrl = null;
 
+async function listPlayableCatalogs() {
+  if (!isCryptoAvailable()) {
+    return [];
+  }
+
+  try {
+    return await listCatalogs();
+  } catch {
+    return [];
+  }
+}
+
+function syncStageLibraryButton(catalogs = [], desktopLibraries = getDesktopLibraries()) {
+  if (!stageLibrary) {
+    return;
+  }
+
+  const count = catalogs.length + desktopLibraries.length;
+  stageLibrary.hidden = count === 0;
+  stageLibrary.textContent = count > 1 ? `Library (${count})` : "Library";
+}
+
+async function refreshStageLibraryButton(catalogs = null) {
+  const nextCatalogs = catalogs || await listPlayableCatalogs();
+  syncStageLibraryButton(nextCatalogs, getDesktopLibraries());
+  return nextCatalogs;
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -103,6 +133,49 @@ function formatDate(value) {
     hour: "numeric",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+function formatRecentTime(value) {
+  if (!value) {
+    return "Last used recently";
+  }
+
+  return `Last used ${new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(new Date(value))}`;
+}
+
+function normalizeFolderPath(value) {
+  return (value || "").trim();
+}
+
+function folderNameFromPath(value) {
+  const trimmed = normalizeFolderPath(value).replace(/[\\/]+$/, "");
+  if (!trimmed) {
+    return "";
+  }
+
+  const parts = trimmed.split(/[\\/]+/);
+  return parts[parts.length - 1] || trimmed;
+}
+
+function getDesktopLibraries(currentState = state) {
+  if (!currentState?.canConfigure || !Array.isArray(currentState.recentSlideshows)) {
+    return [];
+  }
+
+  return currentState.recentSlideshows
+    .filter(slideshow => normalizeFolderPath(slideshow.folderPath))
+    .slice(0, 8);
+}
+
+function isCurrentDesktopLibrary(slideshow) {
+  const currentPath = normalizeFolderPath(state?.folderPath).toLowerCase();
+  const folderPath = normalizeFolderPath(slideshow?.folderPath).toLowerCase();
+  return Boolean(currentPath && folderPath && currentPath === folderPath);
 }
 
 function etaText(completed, total, elapsedMs) {
@@ -175,6 +248,26 @@ function isNativeSlideshowWindow() {
     Boolean(window.chrome?.webview);
 }
 
+function getRequestedOfflineCatalogId() {
+  return new URLSearchParams(window.location.search).get("offlineCatalog") || "";
+}
+
+async function openRequestedOfflineCatalog() {
+  const catalogId = getRequestedOfflineCatalogId();
+  if (!catalogId || !isCryptoAvailable()) {
+    return false;
+  }
+
+  const catalogs = await listPlayableCatalogs();
+  const catalog = catalogs.find(item => item.id === catalogId);
+  if (!catalog) {
+    return false;
+  }
+
+  await openOfflineCatalog(catalog);
+  return true;
+}
+
 function isPlaybackFullscreen() {
   return Boolean(document.fullscreenElement) || isStandaloneDisplay() || isNativeSlideshowWindow();
 }
@@ -241,6 +334,10 @@ async function load() {
     activeOfflineCatalog = null;
     offlineSession = null;
     index = 0;
+    await refreshStageLibraryButton();
+    if (await openRequestedOfflineCatalog()) {
+      return;
+    }
     startViewerHeartbeat();
     startRefreshWatcher();
     await render();
@@ -354,16 +451,32 @@ async function render() {
   updateOfflinePanel();
 
   if (mode === "offline" && catalog?.protectionMode === "pin" && !offlineSession) {
-    showEmpty("Protected slideshow", "Enter the PIN to continue.", "Locked");
+    await showEmpty("Protected slideshow", "Enter the PIN to continue.", "Locked", { showOfflineLibrary: false });
     return;
   }
 
   if (!images.length) {
-    showEmpty("Choose an image folder", "Open the control center on this computer to pick a folder.", "0 / 0");
+    const catalogs = await listPlayableCatalogs();
+    const desktopLibraries = getDesktopLibraries();
+    await refreshStageLibraryButton(catalogs);
+    if (catalogs.length || desktopLibraries.length) {
+      await showEmpty(
+        "Slideshow libraries",
+        currentState?.scanMessage ||
+          (mode === "offline"
+            ? "Pick a saved slideshow stored on this device."
+            : "Pick a saved slideshow from this computer, or open an encrypted offline copy."),
+        `${catalogs.length + desktopLibraries.length} saved`,
+        { catalogs, desktopLibraries }
+      );
+    } else {
+      await showEmpty("Choose an image folder", "Open the control center on this computer to pick a folder.", "0 / 0");
+    }
     return;
   }
 
   emptyState.style.display = "none";
+  renderEmptyOfflineLibrary([], []);
   const current = images[index];
   positionText.textContent = `${index + 1} / ${images.length}`;
   image.classList.remove("visible");
@@ -395,7 +508,7 @@ async function render() {
   }
 }
 
-function showEmpty(title, message, position) {
+async function showEmpty(title, message, position, options = {}) {
   revokeObjectUrl();
   image.classList.remove("visible");
   image.removeAttribute("src");
@@ -403,6 +516,135 @@ function showEmpty(title, message, position) {
   emptyState.querySelector("h1").textContent = title;
   emptyState.querySelector("p").textContent = message;
   positionText.textContent = position;
+
+  if (options.showOfflineLibrary === false) {
+    renderEmptyOfflineLibrary([], []);
+    return;
+  }
+
+  renderEmptyOfflineLibrary(
+    options.catalogs || await listPlayableCatalogs(),
+    options.desktopLibraries || getDesktopLibraries()
+  );
+}
+
+function renderEmptyOfflineLibrary(catalogs = [], desktopLibraries = getDesktopLibraries()) {
+  syncStageLibraryButton(catalogs, desktopLibraries);
+
+  if (!emptyOfflineLibrary) {
+    return;
+  }
+
+  const total = catalogs.length + desktopLibraries.length;
+  emptyState.classList.toggle("has-offline-library", total > 0);
+  emptyOfflineLibrary.hidden = total === 0;
+  emptyOfflineLibrary.replaceChildren();
+
+  if (!total) {
+    return;
+  }
+
+  const heading = document.createElement("div");
+  heading.className = "empty-library-heading";
+
+  const title = document.createElement("strong");
+  title.textContent = catalogs.length && desktopLibraries.length
+    ? "Libraries"
+    : desktopLibraries.length
+      ? "Slideshow library"
+      : "Offline library";
+
+  const manage = document.createElement("button");
+  manage.type = "button";
+  manage.textContent = "Library";
+  manage.addEventListener("click", event => {
+    event.stopPropagation();
+    showStageLibrary();
+  });
+
+  heading.append(title, manage);
+
+  const list = document.createElement("div");
+  list.className = "empty-catalog-list";
+
+  desktopLibraries.slice(0, 4).forEach(slideshow => {
+    list.append(createDesktopLibraryCard(slideshow));
+  });
+
+  catalogs.slice(0, 4).forEach(catalog => {
+    list.append(createOfflineCatalogCard(catalog));
+  });
+
+  emptyOfflineLibrary.append(heading, list);
+}
+
+function createDesktopLibraryCard(slideshow) {
+  const folderPath = normalizeFolderPath(slideshow.folderPath);
+  const current = isCurrentDesktopLibrary(slideshow);
+  const card = document.createElement("article");
+  card.className = `empty-catalog-card${current ? " is-current" : ""}`;
+
+  const details = document.createElement("div");
+  const name = document.createElement("strong");
+  name.textContent = slideshow.folderName || folderNameFromPath(folderPath) || "Slideshow";
+  const meta = document.createElement("small");
+  meta.textContent = `${current ? "Current - " : ""}${formatRecentTime(slideshow.lastUsedAt)} - ${folderPath}`;
+  details.append(name, meta);
+
+  const actions = document.createElement("div");
+  actions.className = "empty-catalog-actions";
+  const play = document.createElement("button");
+  play.type = "button";
+  play.className = "primary";
+  play.textContent = current ? "Retry" : "Play";
+  play.addEventListener("click", async event => {
+    event.stopPropagation();
+    play.disabled = true;
+    await openDesktopLibrary(slideshow);
+    play.disabled = false;
+  });
+  actions.append(play);
+
+  card.append(details, actions);
+  return card;
+}
+
+function createOfflineCatalogCard(catalog) {
+  const card = document.createElement("article");
+  card.className = "empty-catalog-card";
+
+  const details = document.createElement("div");
+  const name = document.createElement("strong");
+  name.textContent = catalog.displayName;
+  const meta = document.createElement("small");
+  const protection = catalog.protectionMode === "pin" ? "PIN protected" : "local key";
+  meta.textContent = `${catalog.imageCount || 0} images - ${protection} - ${formatBytes(catalog.sizeBytes)} - ${formatDate(catalog.syncedAt)}`;
+  details.append(name, meta);
+
+  const actions = document.createElement("div");
+  actions.className = "empty-catalog-actions";
+  const play = document.createElement("button");
+  play.type = "button";
+  play.className = "primary";
+  play.textContent = "Play";
+  play.addEventListener("click", async event => {
+    event.stopPropagation();
+    play.disabled = true;
+    await openOfflineCatalog(catalog);
+    play.disabled = false;
+  });
+  actions.append(play);
+
+  card.append(details, actions);
+  return card;
+}
+
+async function refreshEmptyOfflineLibrary() {
+  if (!emptyOfflineLibrary || emptyState.style.display === "none") {
+    return;
+  }
+
+  renderEmptyOfflineLibrary(await refreshStageLibraryButton(), getDesktopLibraries());
 }
 
 async function resolveImageSource(current) {
@@ -600,6 +842,36 @@ async function switchFolderWhilePlaying() {
   } finally {
     switchFolder.textContent = "Switch folder";
     switchFolder.disabled = false;
+  }
+}
+
+async function openDesktopLibrary(slideshow) {
+  const folderPath = normalizeFolderPath(slideshow?.folderPath);
+  if (!folderPath || !state?.canConfigure) {
+    showTapFeedback("Unavailable", "center");
+    return;
+  }
+
+  showChrome();
+  try {
+    const currentPath = normalizeFolderPath(state?.folderPath).toLowerCase();
+    const nextPath = folderPath.toLowerCase();
+    const nextState = currentPath && currentPath === nextPath
+      ? await fetchJson("/api/rescan", { method: "POST" })
+      : await fetchJson("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folderPath })
+      });
+
+    mode = "online";
+    activeOfflineCatalog = null;
+    offlineSession = null;
+    await reloadSlideshow(nextState);
+    showTapFeedback(images.length ? "Playing" : "Unavailable", "center");
+    showChromeTemporarily();
+  } catch {
+    showTapFeedback("Unavailable", "center");
   }
 }
 
@@ -839,6 +1111,7 @@ async function saveCurrentOffline() {
     showTapFeedback("Saved", "center");
     await messageModal(plan.existing ? "Updated offline" : "Saved offline", `${catalog.displayName} is ready for encrypted offline playback.`);
     updateOfflinePanel();
+    await refreshStageLibraryButton();
   } catch (error) {
     progress.close();
     await messageModal("Save failed", error.message || "The offline copy could not be saved.");
@@ -881,12 +1154,19 @@ async function showOfflineStartup() {
   activeOfflineCatalog = null;
   offlineSession = null;
   images = [];
-  await render();
-  const catalogs = isCryptoAvailable() ? await listCatalogs() : [];
+  if (await openRequestedOfflineCatalog()) {
+    return;
+  }
+  const catalogs = await listPlayableCatalogs();
   if (catalogs.length) {
-    await showOfflineLibrary();
+    await showEmpty(
+      "Offline libraries",
+      "Pick a saved slideshow stored on this device.",
+      `${catalogs.length} saved`,
+      { catalogs }
+    );
   } else {
-    showEmpty("Slideshow unavailable", "Reconnect to Slide Show to save an encrypted offline copy.", "0 / 0");
+    await showEmpty("Slideshow unavailable", "Reconnect to Slide Show to save an encrypted offline copy.", "0 / 0");
   }
 }
 
@@ -967,6 +1247,11 @@ async function refreshOfflineCatalog(catalog, options = {}) {
 }
 
 async function openOfflineCatalog(catalog) {
+  if (!catalog) {
+    showTapFeedback("Unavailable", "center");
+    return;
+  }
+
   const key = await unlockCatalogKey(catalog);
   if (!key) {
     return;
@@ -1006,13 +1291,79 @@ async function openOfflineCatalog(catalog) {
   showChromeTemporarily();
 }
 
+async function showStageLibrary() {
+  const desktopLibraries = getDesktopLibraries();
+  const catalogs = await listPlayableCatalogs();
+  await refreshStageLibraryButton(catalogs);
+
+  if (!desktopLibraries.length && !catalogs.length) {
+    await messageModal("No saved slideshows", "Choose a slideshow from the control center or save one offline first.");
+    return;
+  }
+
+  const desktopItems = desktopLibraries.map((slideshow, index) => {
+    const folderPath = normalizeFolderPath(slideshow.folderPath);
+    const current = isCurrentDesktopLibrary(slideshow);
+    const title = slideshow.folderName || folderNameFromPath(folderPath) || "Slideshow";
+    return `
+      <article class="catalog-card${current ? " is-current" : ""}">
+        <strong>${escapeHtml(title)}</strong>
+        <small>${escapeHtml(current ? "Current - " : "")}${escapeHtml(formatRecentTime(slideshow.lastUsedAt))} - ${escapeHtml(folderPath)}</small>
+        <div class="catalog-actions">
+          <button class="primary" data-desktop="${index}" type="button">${current ? "Retry" : "Play"}</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+
+  const offlineItems = catalogs.map(catalog => {
+    const protection = catalog.protectionMode === "pin" ? "PIN protected" : "local key";
+    return `
+      <article class="catalog-card">
+        <strong>${escapeHtml(catalog.displayName)}</strong>
+        <small>${escapeHtml(catalog.imageCount || 0)} images - ${escapeHtml(protection)} - ${escapeHtml(formatBytes(catalog.sizeBytes))} - ${escapeHtml(formatDate(catalog.syncedAt))}</small>
+        <div class="catalog-actions">
+          <button class="primary" data-offline="${escapeHtml(catalog.id)}" type="button">Play</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+
+  return showModal(`
+    <h2>Library</h2>
+    <p>Pick a slideshow to play from this stage.</p>
+    <div class="modal-stack catalog-list">
+      ${desktopItems ? `<h3>Slideshow library</h3>${desktopItems}` : ""}
+      ${offlineItems ? `<h3>Offline copies</h3>${offlineItems}` : ""}
+    </div>
+    <div class="modal-actions">
+      <button data-cancel type="button">Close</button>
+    </div>
+  `, (card, close) => {
+    card.querySelectorAll("[data-desktop]").forEach(button => {
+      button.addEventListener("click", async () => {
+        close(true);
+        await openDesktopLibrary(desktopLibraries[Number(button.dataset.desktop)]);
+      });
+    });
+    card.querySelectorAll("[data-offline]").forEach(button => {
+      button.addEventListener("click", async () => {
+        close(true);
+        await openOfflineCatalog(catalogs.find(catalog => catalog.id === button.dataset.offline));
+      });
+    });
+  });
+}
+
 async function showOfflineLibrary() {
   if (!isCryptoAvailable()) {
+    await refreshStageLibraryButton([]);
     await messageModal("HTTPS required", "Open the HTTPS slideshow link before using encrypted offline playback.");
     return;
   }
 
   const catalogs = await listCatalogs();
+  await refreshStageLibraryButton(catalogs);
   if (!catalogs.length) {
     await messageModal("No saved slideshows", "Save a slideshow offline while connected to this PC.");
     return;
@@ -1065,6 +1416,7 @@ async function showOfflineLibrary() {
         const result = await refreshOfflineCatalog(byId(button.dataset.refresh));
         if (result.refreshed) {
           await showOfflineLibrary();
+          await refreshEmptyOfflineLibrary();
         } else {
           showTapFeedback("Current", "center");
         }
@@ -1075,6 +1427,7 @@ async function showOfflineLibrary() {
         close(true);
         await renameCatalog(byId(button.dataset.rename));
         await showOfflineLibrary();
+        await refreshEmptyOfflineLibrary();
       });
     });
     card.querySelectorAll("[data-pin]").forEach(button => {
@@ -1082,6 +1435,7 @@ async function showOfflineLibrary() {
         close(true);
         await changeCatalogPin(byId(button.dataset.pin));
         await showOfflineLibrary();
+        await refreshEmptyOfflineLibrary();
       });
     });
     card.querySelectorAll("[data-delete]").forEach(button => {
@@ -1089,6 +1443,7 @@ async function showOfflineLibrary() {
         close(true);
         await deleteSavedCatalog(byId(button.dataset.delete));
         await showOfflineLibrary();
+        await refreshEmptyOfflineLibrary();
       });
     });
   });
@@ -1304,6 +1659,12 @@ fullscreenToggle.addEventListener("click", async event => {
   } catch {
     showTapFeedback("Unavailable", "center");
   }
+});
+
+stageLibrary?.addEventListener("click", event => {
+  event.stopPropagation();
+  showChrome();
+  showStageLibrary();
 });
 
 slower.addEventListener("click", () => {
