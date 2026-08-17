@@ -402,14 +402,14 @@ input:focus-visible {
   bottom: 0;
   left: 0;
   z-index: 6;
-  height: 3px;
+  height: 1px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.1);
-  opacity: .9;
+  background: transparent;
+  opacity: .5;
   pointer-events: none;
 }
 
-.slide-progress span { display: block; width: 0; height: 100%; background: var(--accent); transform-origin: left; }
+.slide-progress span { display: block; width: 0; height: 100%; background: rgba(255, 255, 255, 0.72); transform-origin: left; }
 .slide-progress.running span { animation: slide-progress var(--slide-duration) linear forwards; }
 .slide-progress.paused span { animation-play-state: paused; }
 @keyframes slide-progress { from { width: 0; } to { width: 100%; } }

@@ -279,7 +279,7 @@ async function openRequestedOfflineCatalog() {
 }
 
 function isPlaybackFullscreen() {
-  return Boolean(document.fullscreenElement) || isStandaloneDisplay() || isNativeSlideshowWindow();
+  return Boolean(document.fullscreenElement || document.webkitFullscreenElement) || isStandaloneDisplay() || isNativeSlideshowWindow();
 }
 
 function shouldHideMouseCursor() {
@@ -291,7 +291,7 @@ function shouldHideMouseCursor() {
 
 function updateFullscreenState() {
   if (fullscreenToggle) {
-    const fullscreen = Boolean(document.fullscreenElement);
+    const fullscreen = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
     const label = fullscreen ? "Exit full screen" : "Open full screen";
     fullscreenToggle.setAttribute("aria-label", label);
     fullscreenToggle.title = label;
@@ -315,15 +315,21 @@ async function openNativeSlideshowWindow() {
 }
 
 async function toggleFullscreen() {
-  if (document.fullscreenElement) {
-    await document.exitFullscreen();
+  const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+  if (fullscreenElement) {
+    const exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
+    if (!exitFullscreen) {
+      throw new Error("Fullscreen unavailable.");
+    }
+    await exitFullscreen.call(document);
     return;
   }
 
-  if (stage.requestFullscreen) {
+  const requestFullscreen = stage.requestFullscreen || stage.webkitRequestFullscreen;
+  if (requestFullscreen) {
     try {
-      await stage.requestFullscreen({ navigationUI: "hide" });
-      if (document.fullscreenElement) {
+      await requestFullscreen.call(stage);
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
         return;
       }
     } catch {
@@ -890,6 +896,7 @@ function updateOfflinePanel() {
 }
 
 document.addEventListener("fullscreenchange", updateFullscreenState);
+document.addEventListener("webkitfullscreenchange", updateFullscreenState);
 
 function applyPlaybackSettingsToView() {
   const objectFit = currentImageMode() === "full" ? "cover" : "contain";
@@ -994,18 +1001,25 @@ function updateImageMode(nextMode) {
   postPlaybackSettings({ imageMode: nextMode === "full" ? "full" : "fit" });
 }
 
-function showModal(html, bind) {
+function showModal(html, bind, options = {}) {
   return new Promise(resolve => {
     offlineModal.innerHTML = `<section class="modal-card">${html}</section>`;
     offlineModal.hidden = false;
     updateMouseCursorVisibility();
     const card = offlineModal.querySelector(".modal-card");
     const close = value => {
+      offlineModal.removeEventListener("click", handleBackdropClick);
       offlineModal.hidden = true;
       offlineModal.innerHTML = "";
       updateMouseCursorVisibility();
       resolve(value);
     };
+    const handleBackdropClick = event => {
+      if (options.dismissOnBackdrop && event.target === offlineModal) {
+        close(null);
+      }
+    };
+    offlineModal.addEventListener("click", handleBackdropClick);
     offlineModal.querySelectorAll("[data-cancel]").forEach(button => {
       button.addEventListener("click", () => close(null));
     });
@@ -1463,7 +1477,7 @@ async function showStageLibrary() {
         await openOfflineCatalog(catalogs.find(catalog => catalog.id === button.dataset.offline));
       });
     });
-  });
+  }, { dismissOnBackdrop: true });
 }
 
 async function showOfflineLibrary() {
@@ -1878,8 +1892,9 @@ stage.addEventListener("click", event => {
 stage.addEventListener("pointermove", showChromeTemporarily);
 
 document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && document.fullscreenElement) {
-    document.exitFullscreen().catch(() => {});
+  if (event.key === "Escape" && (document.fullscreenElement || document.webkitFullscreenElement)) {
+    const exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
+    Promise.resolve(exitFullscreen?.call(document)).catch(() => {});
     return;
   }
 
