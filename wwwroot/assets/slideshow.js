@@ -325,6 +325,14 @@ async function toggleFullscreen() {
     return;
   }
 
+  // On the computer running Slide Show, use the app's borderless fullscreen
+  // window. Browser fullscreen can report success without changing the
+  // visible WebView/window, which makes the control appear to do nothing.
+  if (mode === "online" && state?.canConfigure && await openNativeSlideshowWindow()) {
+    showTapFeedback("Full screen", "center");
+    return;
+  }
+
   const requestFullscreen = stage.requestFullscreen || stage.webkitRequestFullscreen;
   if (requestFullscreen) {
     try {
@@ -1016,6 +1024,7 @@ function showModal(html, bind, options = {}) {
     };
     const handleBackdropClick = event => {
       if (options.dismissOnBackdrop && event.target === offlineModal) {
+        event.stopPropagation();
         close(null);
       }
     };

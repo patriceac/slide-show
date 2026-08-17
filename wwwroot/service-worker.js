@@ -1,9 +1,9 @@
-const CACHE_NAME = "slide-show-shell-20260817-cinematic-player4";
+const CACHE_NAME = "slide-show-shell-20260817-cinematic-player5";
 const SHELL_URLS = [
   "/show",
   "/manifest.webmanifest",
-  "/assets/slideshow.css?v=20260817-cinematic-player4",
-  "/assets/slideshow.js?v=20260817-cinematic-player4",
+  "/assets/slideshow.css?v=20260817-cinematic-player5",
+  "/assets/slideshow.js?v=20260817-cinematic-player5",
   "/assets/offline-crypto.js?v=20260529-offline2",
   "/assets/offline-store.js?v=20260529-offline2",
   "/assets/offline-sync.js?v=20260603-auto-refresh",
