@@ -26,7 +26,8 @@ import {
 import { getSyncPlan, syncCatalog } from "./offline-sync.js?v=20260603-auto-refresh";
 
 const stage = document.querySelector("#stage");
-const image = document.querySelector("#slideImage");
+let image = document.querySelector("#slideImage");
+let nextImage = document.querySelector("#nextSlideImage");
 const emptyState = document.querySelector("#emptyState");
 const emptyOfflineLibrary = document.querySelector("#emptyOfflineLibrary");
 const slideshowChrome = document.querySelector("#chrome");
@@ -35,7 +36,13 @@ const positionText = document.querySelector("#positionText");
 const fullscreenToggle = document.querySelector("#fullscreenToggle");
 const stageLibrary = document.querySelector("#stageLibrary");
 const settingsToggle = document.querySelector("#settingsToggle");
+const settingsClose = document.querySelector("#settingsClose");
 const settingsPanel = document.querySelector("#settingsPanel");
+const previousSlide = document.querySelector("#previousSlide");
+const playbackToggle = document.querySelector("#playbackToggle");
+const nextSlide = document.querySelector("#nextSlide");
+const playbackDock = document.querySelector(".playback-dock");
+const slideProgress = document.querySelector("#slideProgress");
 const timerText = document.querySelector("#timerText");
 const slower = document.querySelector("#slower");
 const faster = document.querySelector("#faster");
@@ -71,6 +78,7 @@ let mode = "online";
 let activeOfflineCatalog = null;
 let offlineSession = null;
 let currentObjectUrl = null;
+let preloadedImage = null;
 
 async function listPlayableCatalogs() {
   if (!isCryptoAvailable()) {
@@ -91,7 +99,9 @@ function syncStageLibraryButton(catalogs = [], desktopLibraries = getDesktopLibr
 
   const count = catalogs.length + desktopLibraries.length;
   stageLibrary.hidden = count === 0;
-  stageLibrary.textContent = count > 1 ? `Library (${count})` : "Library";
+  const label = count > 1 ? `Open library, ${count} saved slideshows` : "Open library";
+  stageLibrary.setAttribute("aria-label", label);
+  stageLibrary.title = count > 1 ? `Library (${count})` : "Library";
 }
 
 async function refreshStageLibraryButton(catalogs = null) {
@@ -282,7 +292,9 @@ function shouldHideMouseCursor() {
 function updateFullscreenState() {
   if (fullscreenToggle) {
     const fullscreen = Boolean(document.fullscreenElement);
-    fullscreenToggle.textContent = fullscreen ? "Exit" : "Open full screen";
+    const label = fullscreen ? "Exit full screen" : "Open full screen";
+    fullscreenToggle.setAttribute("aria-label", label);
+    fullscreenToggle.title = label;
     fullscreenToggle.hidden = isStandaloneDisplay() || isNativeSlideshowWindow();
   }
 
@@ -439,12 +451,58 @@ function revokeObjectUrl() {
   }
 }
 
+function clearPlaybackTimer() {
+  clearTimeout(timer);
+  timer = null;
+  slideProgress.classList.remove("running", "paused");
+}
+
+function loadFrame(frame, source, alt) {
+  return new Promise((resolve, reject) => {
+    const settle = callback => {
+      frame.removeEventListener("load", onLoad);
+      frame.removeEventListener("error", onError);
+      callback();
+    };
+    const onLoad = () => settle(resolve);
+    const onError = () => settle(() => reject(new Error("Image failed to load.")));
+
+    frame.classList.remove("visible");
+    frame.alt = alt;
+    frame.addEventListener("load", onLoad);
+    frame.addEventListener("error", onError);
+    frame.src = source;
+
+    if (frame.complete && frame.naturalWidth > 0) {
+      onLoad();
+    }
+  });
+}
+
+function preloadFollowingImage() {
+  if (mode !== "online" || images.length < 2) {
+    preloadedImage = null;
+    return;
+  }
+
+  const following = images[(index + 1) % images.length];
+  if (!following?.url) {
+    return;
+  }
+
+  preloadedImage = new Image();
+  preloadedImage.decoding = "async";
+  preloadedImage.src = following.url;
+}
+
 async function render() {
+  clearPlaybackTimer();
   const token = ++renderToken;
   const catalog = activeOfflineCatalog;
   const currentState = mode === "offline" && catalog ? catalog : state;
   stage.style.background = currentState?.backgroundColor || "#05070a";
   image.style.objectFit = currentState?.imageMode === "full" ? "cover" : "contain";
+  nextImage.style.objectFit = currentState?.imageMode === "full" ? "cover" : "contain";
   folderName.textContent = mode === "offline" && catalog ? `${catalog.displayName} - Offline` : currentState?.folderName || "Slide Show";
   updateSettingsText();
   updateImageModeButtons();
@@ -456,6 +514,7 @@ async function render() {
   }
 
   if (!images.length) {
+    playbackDock.hidden = true;
     const catalogs = await listPlayableCatalogs();
     const desktopLibraries = getDesktopLibraries();
     await refreshStageLibraryButton(catalogs);
@@ -475,11 +534,11 @@ async function render() {
     return;
   }
 
+  playbackDock.hidden = false;
   emptyState.style.display = "none";
   renderEmptyOfflineLibrary([], []);
   const current = images[index];
   positionText.textContent = `${index + 1} / ${images.length}`;
-  image.classList.remove("visible");
 
   try {
     const source = await resolveImageSource(current);
@@ -489,29 +548,58 @@ async function render() {
       }
       return;
     }
-    if (source.owned) {
-      revokeObjectUrl();
-      currentObjectUrl = source.url;
-    } else {
-      revokeObjectUrl();
-    }
-    window.setTimeout(() => {
-      if (token === renderToken) {
-        image.src = source.url;
-        image.alt = current.name || "Slide";
+
+    const incomingFrame = nextImage;
+    const outgoingFrame = image;
+    const outgoingObjectUrl = currentObjectUrl;
+    await loadFrame(incomingFrame, source.url, current.name || "Slide");
+
+    if (token !== renderToken) {
+      if (source.owned) {
+        URL.revokeObjectURL(source.url);
       }
-    }, 80);
+      return;
+    }
+
+    incomingFrame.classList.add("visible");
+    outgoingFrame.classList.remove("visible");
+    image = incomingFrame;
+    nextImage = outgoingFrame;
+    currentObjectUrl = source.owned ? source.url : null;
+
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    if (token !== renderToken) {
+      return;
+    }
+
     schedule();
+    preloadFollowingImage();
+
+    window.setTimeout(() => {
+      if (outgoingFrame !== image) {
+        outgoingFrame.removeAttribute("src");
+        outgoingFrame.alt = "";
+      }
+      if (outgoingObjectUrl) {
+        URL.revokeObjectURL(outgoingObjectUrl);
+      }
+    }, 380);
   } catch {
-    showTapFeedback("Image failed", "center");
-    schedule();
+    if (token === renderToken) {
+      showTapFeedback("Image failed", "center");
+      schedule();
+    }
   }
 }
 
 async function showEmpty(title, message, position, options = {}) {
+  clearPlaybackTimer();
+  playbackDock.hidden = true;
   revokeObjectUrl();
   image.classList.remove("visible");
+  nextImage.classList.remove("visible");
   image.removeAttribute("src");
+  nextImage.removeAttribute("src");
   emptyState.style.display = "grid";
   emptyState.querySelector("h1").textContent = title;
   emptyState.querySelector("p").textContent = message;
@@ -663,17 +751,18 @@ async function resolveImageSource(current) {
   return { url: URL.createObjectURL(clearBlob), owned: true };
 }
 
-image.addEventListener("load", () => {
-  image.classList.add("visible");
-});
-
 function schedule() {
-  clearTimeout(timer);
+  clearPlaybackTimer();
+  updatePlaybackUI();
   if (!playing || !images.length) {
     return;
   }
 
-  timer = setTimeout(() => advance(1), Math.max(2, currentSlideSeconds()) * 1000);
+  const duration = Math.max(2, currentSlideSeconds());
+  slideProgress.style.setProperty("--slide-duration", `${duration}s`);
+  void slideProgress.offsetWidth;
+  slideProgress.classList.add("running");
+  timer = setTimeout(() => advance(1), duration * 1000);
 }
 
 function currentSlideSeconds() {
@@ -689,6 +778,7 @@ async function advance(delta) {
     return;
   }
 
+  clearPlaybackTimer();
   index = (index + delta + images.length) % images.length;
   await render();
 }
@@ -697,6 +787,13 @@ function togglePlayback() {
   playing = !playing;
   schedule();
   updateMouseCursorVisibility();
+}
+
+function updatePlaybackUI() {
+  stage.classList.toggle("is-paused", !playing);
+  const label = playing ? "Pause slideshow" : "Play slideshow";
+  playbackToggle.setAttribute("aria-label", label);
+  playbackToggle.title = playing ? "Pause" : "Play";
 }
 
 function playbackStatusText() {
@@ -712,7 +809,7 @@ function showChrome() {
 function showChromeTemporarily() {
   showChrome();
   chromeTimer = setTimeout(() => {
-    if (settingsPanel.hidden && images.length) {
+    if (settingsPanel.hidden && images.length && playing) {
       slideshowChrome.classList.add("hidden");
     }
     updateMouseCursorVisibility();
@@ -723,6 +820,8 @@ function toggleSettingsPanel() {
   const shouldShow = settingsPanel.hidden;
   settingsPanel.hidden = !shouldShow;
   settingsToggle.setAttribute("aria-expanded", String(shouldShow));
+  settingsToggle.setAttribute("aria-label", shouldShow ? "Close playback settings" : "Open playback settings");
+  settingsToggle.title = shouldShow ? "Close settings" : "Settings";
   slideshowChrome.classList.toggle("panel-open", shouldShow);
 
   if (shouldShow) {
@@ -740,6 +839,8 @@ function hideSettingsPanel() {
 
   settingsPanel.hidden = true;
   settingsToggle.setAttribute("aria-expanded", "false");
+  settingsToggle.setAttribute("aria-label", "Open playback settings");
+  settingsToggle.title = "Settings";
   slideshowChrome.classList.remove("panel-open");
   showChromeTemporarily();
 }
@@ -790,6 +891,16 @@ function updateOfflinePanel() {
 
 document.addEventListener("fullscreenchange", updateFullscreenState);
 
+function applyPlaybackSettingsToView() {
+  const objectFit = currentImageMode() === "full" ? "cover" : "contain";
+  image.style.objectFit = objectFit;
+  nextImage.style.objectFit = objectFit;
+  updateSettingsText();
+  updateImageModeButtons();
+  updateOfflinePanel();
+  schedule();
+}
+
 async function postPlaybackSettings(update) {
   if (mode === "offline") {
     if (activeOfflineCatalog) {
@@ -799,7 +910,7 @@ async function postPlaybackSettings(update) {
       };
       await updateCatalog(activeOfflineCatalog);
     }
-    await render();
+    applyPlaybackSettingsToView();
     return;
   }
 
@@ -807,7 +918,7 @@ async function postPlaybackSettings(update) {
     ...state,
     ...update
   };
-  await render();
+  applyPlaybackSettingsToView();
 
   try {
     const nextState = await fetchJson("/api/playback-settings", {
@@ -816,7 +927,7 @@ async function postPlaybackSettings(update) {
       body: JSON.stringify(update)
     });
     state = nextState;
-    await render();
+    applyPlaybackSettingsToView();
   } catch {
     updateSettingsText();
     updateImageModeButtons();
@@ -1651,6 +1762,11 @@ settingsToggle.addEventListener("click", event => {
   toggleSettingsPanel();
 });
 
+settingsClose.addEventListener("click", event => {
+  event.stopPropagation();
+  hideSettingsPanel();
+});
+
 fullscreenToggle.addEventListener("click", async event => {
   event.stopPropagation();
   try {
@@ -1665,6 +1781,21 @@ stageLibrary?.addEventListener("click", event => {
   event.stopPropagation();
   showChrome();
   showStageLibrary();
+});
+
+previousSlide.addEventListener("click", () => {
+  advance(-1);
+  showChromeTemporarily();
+});
+
+playbackToggle.addEventListener("click", () => {
+  togglePlayback();
+  showChromeTemporarily();
+});
+
+nextSlide.addEventListener("click", () => {
+  advance(1);
+  showChromeTemporarily();
 });
 
 slower.addEventListener("click", () => {
@@ -1776,5 +1907,6 @@ document.addEventListener("keydown", event => {
 });
 
 registerServiceWorker();
+updatePlaybackUI();
 updateFullscreenState();
 load();
