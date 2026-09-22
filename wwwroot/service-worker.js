@@ -1,9 +1,11 @@
-const CACHE_NAME = "slide-show-shell-20260922-gallery";
+const CACHE_NAME = "slide-show-shell-20260922-theme";
 const SHELL_URLS = [
   "/show",
   "/manifest.webmanifest",
   "/assets/playback-state.js?v=20260922-gallery",
-  "/assets/slideshow.css?v=20260922-gallery",
+  "/assets/theme.js?v=20260922-theme",
+  "/assets/theme.css?v=20260922-theme",
+  "/assets/slideshow.css?v=20260922-theme",
   "/assets/slideshow.js?v=20260922-gallery",
   "/assets/offline-crypto.js?v=20260922-gallery",
   "/assets/offline-store.js?v=20260922-gallery",

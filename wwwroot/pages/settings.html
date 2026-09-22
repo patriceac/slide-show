@@ -7,7 +7,9 @@
   <title>Slide Show · Library</title>
   <link rel="icon" href="/assets/darkroom-stage.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260922-gallery" />
+  <script src="/assets/theme.js?v=20260922-theme"></script>
+  <link rel="stylesheet" href="/assets/theme.css?v=20260922-theme" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260922-theme" />
 </head>
 <body>
   <svg class="icon-definitions" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -43,6 +45,10 @@
           <div class="button-row"><button id="playCurrent" class="primary-button" disabled><svg class="icon" aria-hidden="true"><use href="#icon-play"/></svg>Play here</button><button id="watchDevice" disabled><svg class="icon" aria-hidden="true"><use href="#icon-screen"/></svg>Watch on another device</button></div>
         </div>
         <p id="scanMessage" class="notice" hidden></p>
+      </section>
+      <section class="appearance-settings" aria-labelledby="appearanceTitle">
+        <div><h2 id="appearanceTitle">Appearance</h2><p class="hint">Saved automatically for this browser.</p></div>
+        <label for="themePreference">Theme<select id="themePreference" data-theme-select><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       </section>
       <form id="settingsForm">
         <details class="settings-section" id="playbackOptions">

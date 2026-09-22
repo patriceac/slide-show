@@ -7,7 +7,9 @@
   <title>Slide Show</title>
   <link rel="icon" href="/assets/darkroom-stage.png">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="stylesheet" href="/assets/slideshow.css?v=20260922-gallery">
+  <script src="/assets/theme.js?v=20260922-theme"></script>
+  <link rel="stylesheet" href="/assets/theme.css?v=20260922-theme">
+  <link rel="stylesheet" href="/assets/slideshow.css?v=20260922-theme">
 </head>
 <body>
   <main id="stage" class="stage">
@@ -62,6 +64,8 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"></path></svg>
         </button>
       </header>
+      <label for="themePreference">Theme on this device</label>
+      <select id="themePreference" data-theme-select><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
       <p id="timerText"></p>
       <p id="settingsScope" class="panel-label"></p>
       <label for="playbackOrder">Photo order</label>

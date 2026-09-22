@@ -10,6 +10,8 @@ Slide Show is a local Windows slideshow controller with a companion Android view
 
 Playback supports shuffle, file name, and modification date order, and remembers the current photo per library on each device. **Show entire photo** preserves the edges; **Fill screen** crops them. Playback changes on connected viewers apply to the PC's other connected viewers; saved copies have independent settings.
 
+**Theme** offers System (the default), Light, and Dark in the library and playback settings. The choice is saved on each browser or Android device, follows system changes automatically, and leaves the photo background unchanged.
+
 Offline downloads show progress and can be canceled. A failed or canceled replacement preserves the previous copy. Android keeps up to four saved libraries. Browser saving requires HTTPS or localhost and available browser storage. Browser copies belong to the browser and address where they were saved.
 
 Closing the control tab keeps the Windows server running in the system tray. Start at login is optional. JPG, PNG, WebP, GIF, BMP, AVIF and SVG are served by the PC; native Android format support depends on its OS. Convert HEIC/HEIF first.
@@ -37,7 +39,7 @@ gradle assembleRelease
 
 ## Regression checks
 
-Focused regression checks: `dotnet test tests/SlideShow.Tests.csproj -c Release`, `node --test tests/playback.test.mjs`, and `gradle :app:testDebugUnitTest` from `android/`.
+Focused regression checks: `dotnet test tests/SlideShow.Tests.csproj -c Release`, `node --test tests/*.test.mjs`, and `gradle :app:testDebugUnitTest` from `android/`.
 
 ## Git Safety
 

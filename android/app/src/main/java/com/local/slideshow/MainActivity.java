@@ -70,12 +70,9 @@ public class MainActivity extends Activity {
     private static final String DISCOVERY_PROBE = "SLIDE_SHOW_DISCOVER_V1";
     private static final String LOG_TAG = "SlideShowAndroid";
     private static final long SERVER_FOLDER_WATCH_MS = 5000;
-    private static final int INK = Color.rgb(36, 43, 53);
-    private static final int MUTED = Color.rgb(105, 117, 134);
-    private static final int ACCENT = Color.rgb(53, 76, 101);
-    private static final int SURFACE = Color.rgb(250, 250, 249);
-    private static final int LINE = Color.rgb(231, 232, 233);
-    private static final int OVERLAY = Color.argb(210, 29, 36, 47);
+    private int INK, MUTED, ACCENT, SURFACE, LINE, OVERLAY, CARD, PRIMARY_TEXT;
+    private String themePreference = "system";
+    private boolean darkTheme;
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final ExecutorService imageExecutor = Executors.newSingleThreadExecutor();
@@ -189,6 +186,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        themePreference = ThemePreference.normalize(getSharedPreferences("appearance", MODE_PRIVATE).getString("theme", "system"));
+        applyThemePalette();
         super.onCreate(savedInstanceState);
         Window window = getWindow();
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE);
@@ -326,6 +325,66 @@ public class MainActivity extends Activity {
             && checkSelfPermission(Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED;
     }
 
+    private boolean useDarkTheme() {
+        return ThemePreference.isDark(themePreference,
+            (getResources().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                == android.content.res.Configuration.UI_MODE_NIGHT_YES);
+    }
+
+    private void applyThemePalette() {
+        darkTheme = useDarkTheme();
+        setTheme(darkTheme ? R.style.AppThemeDark : R.style.AppTheme);
+        INK = Color.parseColor(darkTheme ? "#e5eaf1" : "#242b35");
+        MUTED = Color.parseColor(darkTheme ? "#a4afbf" : "#697586");
+        ACCENT = Color.parseColor(darkTheme ? "#bfd2eb" : "#354c65");
+        SURFACE = Color.parseColor(darkTheme ? "#171c24" : "#fafaf9");
+        LINE = Color.parseColor(darkTheme ? "#465268" : "#d7dbe0");
+        CARD = Color.parseColor(darkTheme ? "#252e3c" : "#ffffff");
+        PRIMARY_TEXT = darkTheme ? Color.rgb(25, 38, 53) : Color.WHITE;
+        OVERLAY = darkTheme ? Color.argb(235, 28, 34, 44) : Color.argb(235, 250, 250, 249);
+    }
+
+    private Button themeButton(boolean overlay) {
+        String label = "Theme: " + ("dark".equals(themePreference) ? "Dark" : "light".equals(themePreference) ? "Light" : "System");
+        Button button = overlay ? overlayButton(label) : button(label, false);
+        button.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Theme on this device")
+            .setSingleChoiceItems(new String[]{"System", "Light", "Dark"},
+                "light".equals(themePreference) ? 1 : "dark".equals(themePreference) ? 2 : 0,
+                (dialog, which) -> {
+                    themePreference = new String[]{"system", "light", "dark"}[which];
+                    getSharedPreferences("appearance", MODE_PRIVATE).edit().putString("theme", themePreference).apply();
+                    dialog.dismiss();
+                    refreshTheme();
+                }).setNegativeButton("Cancel", null).show());
+        return button;
+    }
+
+    private void refreshTheme() {
+        applyThemePalette();
+        if (root == null) return;
+        if (!showingSlideshow) {
+            String title = discoveryTitle.getText().toString(), message = discoveryMessage.getText().toString();
+            int progressVisibility = discoveryProgress.getVisibility();
+            showDiscoveryScreen(title, message);
+            if (!discovered.isEmpty()) renderDiscoveredServers();
+            discoveryTitle.setText(title); discoveryMessage.setText(message);
+            discoveryProgress.setVisibility(progressVisibility);
+            return;
+        }
+        // Repaint controls in place so playback and protected photos are undisturbed.
+        folderTitle.setTextColor(INK); positionText.setTextColor(MUTED);
+        ((View) folderTitle.getParent()).setBackground(rounded(OVERLAY, 8, false));
+        ((View) positionText.getParent()).setBackground(rounded(OVERLAY, 8, false));
+        libraryButton.setTextColor(INK); libraryButton.setBackground(buttonBackground(OVERLAY, true));
+        playbackControls.setBackground(rounded(OVERLAY, 14, false));
+        for (int i = 0; i < playbackControls.getChildCount(); i++) ((Button) playbackControls.getChildAt(i)).setTextColor(INK);
+        pauseButton.setBackground(buttonBackground(ACCENT, false)); pauseButton.setTextColor(PRIMARY_TEXT);
+        settingsPanel.setBackgroundColor(SURFACE);
+        settingsScroll.setBackground(rounded(SURFACE, 16, false));
+        buildSettingsPanel();
+        feedbackText.setTextColor(INK); feedbackText.setBackground(rounded(OVERLAY, 18, false));
+    }
+
     private void showDiscoveryScreen(String title, String message) {
         showingSlideshow = false;
         handler.removeCallbacks(advanceRunnable);
@@ -348,6 +407,7 @@ public class MainActivity extends Activity {
         brand.setGravity(Gravity.CENTER_VERTICAL);
         ImageView brandIcon = new ImageView(this);
         brandIcon.setImageResource(R.drawable.ic_photo);
+        brandIcon.setImageTintList(ColorStateList.valueOf(MUTED));
         LinearLayout.LayoutParams brandIconParams = new LinearLayout.LayoutParams(dp(24), dp(24));
         brandIconParams.rightMargin = dp(10);
         brand.addView(brandIcon, brandIconParams);
@@ -392,6 +452,7 @@ public class MainActivity extends Activity {
         manual.setBackground(buttonBackground(Color.TRANSPARENT, false));
         manual.setOnClickListener(v -> showManualAddressDialog());
         actions.addView(manual, fullButtonParams());
+        actions.addView(themeButton(false), fullButtonParams());
 
         root.addView(scroll);
         setContentView(root);
@@ -623,6 +684,7 @@ public class MainActivity extends Activity {
             heading.setGravity(Gravity.CENTER_VERTICAL);
             ImageView pcIcon = new ImageView(this);
             pcIcon.setImageResource(R.drawable.ic_computer);
+            pcIcon.setImageTintList(ColorStateList.valueOf(MUTED));
             LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(32), dp(32));
             iconParams.rightMargin = dp(14);
             heading.addView(pcIcon, iconParams);
@@ -696,7 +758,8 @@ public class MainActivity extends Activity {
         ImageView thumbnail = new ImageView(this);
         thumbnail.setImageResource(catalog.hasPin() ? R.drawable.ic_lock : R.drawable.ic_photo);
         thumbnail.setScaleType(ImageView.ScaleType.CENTER);
-        thumbnail.setBackground(rounded(Color.rgb(241, 243, 245), 8, false));
+        thumbnail.setBackground(rounded(SURFACE, 8, false));
+        thumbnail.setImageTintList(ColorStateList.valueOf(MUTED));
         thumbnail.setClipToOutline(true);
         thumbnail.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         LinearLayout.LayoutParams thumbnailParams = new LinearLayout.LayoutParams(dp(76), dp(82));
@@ -710,6 +773,7 @@ public class MainActivity extends Activity {
                     handler.post(() -> {
                         if (!isDestroyed() && thumbnail.isAttachedToWindow()) {
                             thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                            thumbnail.setImageTintList(null);
                             thumbnail.setImageBitmap(preview);
                         } else preview.recycle();
                     });
@@ -1280,13 +1344,13 @@ public class MainActivity extends Activity {
         libraryButton.setOnClickListener(v -> returnToSlideshowLauncher());
         top.addView(libraryButton, new LinearLayout.LayoutParams(-2,-2));
         LinearLayout folderPill = pillRow();
-        folderTitle = text(offline ? folderName + " - Offline" : folderName, 16, Color.WHITE, true);
+        folderTitle = text(offline ? folderName + " - Offline" : folderName, 16, INK, true);
         folderTitle.setSingleLine(true);
         folderTitle.setEllipsize(TextUtils.TruncateAt.END);
         folderPill.addView(folderTitle);
 
         LinearLayout counterPill = pillRow();
-        positionText = text("0 / 0", 15, Color.argb(190, 255, 255, 255), false);
+        positionText = text("0 / 0", 15, MUTED, false);
         counterPill.addView(positionText);
 
         LinearLayout.LayoutParams folderParams = new LinearLayout.LayoutParams(0, -2, 1);
@@ -1310,8 +1374,8 @@ public class MainActivity extends Activity {
         previous.setBackground(buttonBackground(Color.TRANSPARENT, false));
         next.setBackground(buttonBackground(Color.TRANSPARENT, false));
         settingsButton.setBackground(buttonBackground(Color.TRANSPARENT, false));
-        pauseButton.setBackground(buttonBackground(Color.rgb(239, 243, 248), false));
-        pauseButton.setTextColor(INK);
+        pauseButton.setBackground(buttonBackground(ACCENT, false));
+        pauseButton.setTextColor(PRIMARY_TEXT);
         playbackControls.addView(previous,controlParams()); playbackControls.addView(pauseButton,controlParams());
         playbackControls.addView(next,controlParams()); playbackControls.addView(settingsButton,controlParams());
         chrome.addView(playbackControls,new LinearLayout.LayoutParams(-1,-2));
@@ -1324,18 +1388,18 @@ public class MainActivity extends Activity {
         settingsPanel = new LinearLayout(this);
         settingsPanel.setOrientation(LinearLayout.VERTICAL);
         settingsPanel.setPadding(dp(20), dp(12), dp(20), dp(24));
-        settingsPanel.setBackgroundColor(Color.rgb(25, 32, 42));
+        settingsPanel.setBackgroundColor(SURFACE);
         settingsPanel.setClickable(true);
         settingsPanel.setVisibility(View.GONE);
         settingsScroll = new ScrollView(this);
-        settingsScroll.setBackground(rounded(Color.rgb(25, 32, 42), 16, false));
+        settingsScroll.setBackground(rounded(SURFACE, 16, false));
         settingsScroll.setClipToOutline(true);
         settingsScroll.addView(settingsPanel);
         settingsScroll.setVisibility(View.GONE);
         root.addView(settingsScroll, settingsPanelParams());
         buildSettingsPanel();
 
-        feedbackText = text("", 44, Color.WHITE, true);
+        feedbackText = text("", 44, INK, true);
         feedbackText.setGravity(Gravity.CENTER);
         feedbackText.setMinWidth(dp(118));
         feedbackText.setMinHeight(dp(86));
@@ -1386,14 +1450,15 @@ public class MainActivity extends Activity {
         settingsPanel.removeAllViews();
         LinearLayout heading = new LinearLayout(this);
         heading.setGravity(Gravity.CENTER_VERTICAL);
-        heading.addView(text("Playback", 24, Color.WHITE, true), new LinearLayout.LayoutParams(0, -2, 1));
+        heading.addView(text("Playback", 24, INK, true), new LinearLayout.LayoutParams(0, -2, 1));
         Button closeSettings = overlayButton("Close");
         closeSettings.setContentDescription("Close settings");
         closeSettings.setBackground(buttonBackground(Color.TRANSPARENT, false));
         closeSettings.setOnClickListener(v -> setSettingsPanelVisible(false));
         heading.addView(closeSettings, new LinearLayout.LayoutParams(-2, -2));
         settingsPanel.addView(heading);
-        TextView scope = text(activeOffline ? "Only this saved copy" : "Applies to viewers connected to this PC",13,Color.rgb(181,193,209),false);
+        settingsPanel.addView(themeButton(true), fullButtonParams());
+        TextView scope = text(activeOffline ? "Only this saved copy" : "Applies to viewers connected to this PC",13,MUTED,false);
         scope.setPadding(0, 0, 0, dp(16));
         settingsPanel.addView(scope);
         Button order = overlayButton("Order: " + ("name".equals(playbackOrder)?"File name":"date".equals(playbackOrder)?"Date modified":"Shuffle"));
@@ -1403,7 +1468,7 @@ public class MainActivity extends Activity {
         }).show()); settingsPanel.addView(order,fullButtonParams());
         Button restart = overlayButton("Start from beginning"); restart.setOnClickListener(v -> {currentIndex=0;renderCurrentSlide();}); settingsPanel.addView(restart,fullButtonParams());
 
-        timerText = text("", 16, Color.argb(220, 255, 255, 255), false);
+        timerText = text("", 16, INK, false);
         timerText.setPadding(0, dp(14), 0, dp(8));
         settingsPanel.addView(timerText);
 
@@ -1419,7 +1484,7 @@ public class MainActivity extends Activity {
         faster.setOnClickListener(v -> updateTimer(slideSeconds + 1));
         timerControls.addView(faster, controlParams());
 
-        TextView imageSize = text("Image size", 16, Color.argb(220, 255, 255, 255), false);
+        TextView imageSize = text("Image size", 16, INK, false);
         imageSize.setPadding(0, dp(18), 0, dp(8));
         settingsPanel.addView(imageSize);
 
@@ -1435,11 +1500,11 @@ public class MainActivity extends Activity {
         fullButton.setOnClickListener(v -> updateImageMode("full"));
         modeControls.addView(fullButton, controlParams());
 
-        TextView offlineTitle = text("Offline slideshows", 16, Color.argb(220, 255, 255, 255), false);
+        TextView offlineTitle = text("Offline slideshows", 16, INK, false);
         offlineTitle.setPadding(0, dp(18), 0, dp(8));
         settingsPanel.addView(offlineTitle);
 
-        TextView offlineDetails = text(activeCatalog == null || activeCatalog.slotId == 0 ? "Playing from the PC. Save a copy to watch without a connection." : cleanFolderName(activeCatalog.displayName) + " - " + savedCatalogSummary(activeCatalog), 14, Color.argb(190, 255, 255, 255), false);
+        TextView offlineDetails = text(activeCatalog == null || activeCatalog.slotId == 0 ? "Playing from the PC. Save a copy to watch without a connection." : cleanFolderName(activeCatalog.displayName) + " - " + savedCatalogSummary(activeCatalog), 14, MUTED, false);
         offlineDetails.setPadding(0, 0, 0, dp(8));
         settingsPanel.addView(offlineDetails);
 
@@ -1453,7 +1518,7 @@ public class MainActivity extends Activity {
         }
 
         if (activeCatalog != null && activeCatalog.slotId > 0) {
-            TextView protectionTitle = text("Protection", 16, Color.argb(220, 255, 255, 255), false);
+            TextView protectionTitle = text("Protection", 16, INK, false);
             protectionTitle.setPadding(0, dp(18), 0, dp(8));
             settingsPanel.addView(protectionTitle);
 
@@ -2093,6 +2158,8 @@ public class MainActivity extends Activity {
         boolean full = "full".equals(imageMode);
         fitButton.setBackground(buttonBackground(full ? OVERLAY : ACCENT, true));
         fullButton.setBackground(buttonBackground(full ? ACCENT : OVERLAY, true));
+        fitButton.setTextColor(full ? INK : PRIMARY_TEXT);
+        fullButton.setTextColor(full ? PRIMARY_TEXT : INK);
         fitButton.setSelected(!full);
         fullButton.setSelected(full);
     }
@@ -2282,8 +2349,8 @@ public class MainActivity extends Activity {
         button.setAllCaps(false);
         button.setTextSize(15);
         button.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        button.setTextColor(primary ? Color.WHITE : INK);
-        button.setBackground(buttonBackground(primary ? ACCENT : Color.WHITE, !primary));
+        button.setTextColor(primary ? PRIMARY_TEXT : INK);
+        button.setBackground(buttonBackground(primary ? ACCENT : CARD, !primary));
         button.setPadding(dp(16), dp(10), dp(16), dp(10));
         button.setMinHeight(dp(48));
         button.setMinimumWidth(0);
@@ -2297,7 +2364,7 @@ public class MainActivity extends Activity {
         button.setAllCaps(false);
         button.setTextSize(14);
         button.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        button.setTextColor(Color.WHITE);
+        button.setTextColor(INK);
         button.setBackground(buttonBackground(OVERLAY, true));
         button.setPadding(dp(8), dp(10), dp(8), dp(10));
         button.setMinHeight(dp(48));
@@ -2310,7 +2377,7 @@ public class MainActivity extends Activity {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(color);
         drawable.setCornerRadius(dp(radius));
-        if (border) drawable.setStroke(dp(1), color == Color.WHITE ? LINE : Color.argb(35, 255, 255, 255));
+        if (border) drawable.setStroke(dp(1), LINE);
         return drawable;
     }
 
@@ -2322,7 +2389,7 @@ public class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
         row.setPadding(dp(16), dp(16), dp(16), dp(16));
-        row.setBackground(rounded(Color.WHITE, 12, true));
+        row.setBackground(rounded(CARD, 12, true));
         return row;
     }
 
@@ -2383,6 +2450,7 @@ public class MainActivity extends Activity {
 
     @Override public void onConfigurationChanged(android.content.res.Configuration config) {
         super.onConfigurationChanged(config);
+        if (darkTheme != useDarkTheme()) refreshTheme();
         if (settingsScroll != null) settingsScroll.setLayoutParams(settingsPanelParams());
     }
 
