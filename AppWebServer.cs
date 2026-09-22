@@ -83,6 +83,7 @@ public sealed class AppWebServer : IAsyncDisposable
                 await app.DisposeAsync();
             }
         }
+        throw new IOException("Slide Show could not start its server. Close another copy of Slide Show and try again.");
     }
 
     public Task StopAsync() => _app?.StopAsync() ?? Task.CompletedTask;
@@ -153,7 +154,11 @@ public sealed class AppWebServer : IAsyncDisposable
 
             return Results.File(_httpsCertificates.RootCertificateBytes, "application/x-x509-ca-cert", "slide-show-local-root.cer");
         });
-        app.MapGet("/api/state", (HttpContext context) => Results.Json(_state.GetSnapshot(IsLocalRequest(context))));
+        app.MapGet("/api/state", (HttpContext context) =>
+        {
+            _state.RefreshCatalog();
+            return Results.Json(_state.GetSnapshot(IsLocalRequest(context)));
+        });
         app.MapGet("/api/images", (HttpContext context) =>
         {
             var shuffle = !string.Equals(context.Request.Query["shuffle"], "false", StringComparison.OrdinalIgnoreCase);
@@ -161,7 +166,7 @@ public sealed class AppWebServer : IAsyncDisposable
         });
         app.MapGet("/api/offline-source", (HttpContext context) =>
         {
-            _state.Rescan();
+            _state.RefreshCatalog();
             var state = _state.GetSnapshot(IsLocalRequest(context));
             var images = _state.GetImages(shuffle: false);
             return Results.Json(new OfflineSourceDto(state, images));
@@ -193,25 +198,23 @@ public sealed class AppWebServer : IAsyncDisposable
             return Results.Json(_state.GetSnapshot(true));
         });
 
-        app.MapPost("/api/playback-settings", (PlaybackSettingsUpdateDto update) =>
+        app.MapPost("/api/playback-settings", (HttpContext context, PlaybackSettingsUpdateDto update) =>
         {
             _state.UpdatePlaybackSettings(update);
-            return Results.Json(_state.GetSnapshot(false));
+            return Results.Json(_state.GetSnapshot(IsLocalRequest(context)));
         });
 
         app.MapPost("/api/viewer-heartbeat", (HttpContext context, ViewerHeartbeatDto? heartbeat) =>
         {
-            if (!IsLocalRequest(context))
+            var isLocal = IsLocalRequest(context);
+            var viewerKey = GetViewerKey(context) + ":" + (heartbeat?.ViewerId is { Length: <= 80 } id ? id : "viewer");
+            if (heartbeat?.Active == false)
             {
-                var viewerKey = GetViewerKey(context);
-                if (heartbeat?.Active == false)
-                {
-                    _state.ClearRemoteViewer(viewerKey);
-                }
-                else
-                {
-                    _state.RecordRemoteViewer(viewerKey);
-                }
+                _state.ClearRemoteViewer(viewerKey);
+            }
+            else
+            {
+                _state.RecordViewer(viewerKey, isLocal);
             }
 
             return Results.Ok();

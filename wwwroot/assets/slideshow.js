@@ -1,3 +1,4 @@
+import { arrangePhotos, photoKey } from "./playback-state.js?v=20260922-workflows";
 import {
   PIN_ITERATIONS,
   bytesToBase64,
@@ -9,10 +10,9 @@ import {
   isCryptoAvailable,
   randomBytes,
   verifyPinKey
-} from "./offline-crypto.js?v=20260529-offline2";
+} from "./offline-crypto.js?v=20260922-workflows";
 import {
   deleteCatalog,
-  deleteLocalKey,
   estimateStorage,
   folderIdentityFor,
   getImagesForCatalog,
@@ -20,10 +20,9 @@ import {
   listCatalogs,
   makeServerKey,
   saveCatalogBundle,
-  saveLocalKey,
   updateCatalog
-} from "./offline-store.js?v=20260529-offline2";
-import { getSyncPlan, syncCatalog } from "./offline-sync.js?v=20260603-auto-refresh";
+} from "./offline-store.js?v=20260922-workflows";
+import { getSyncPlan, syncCatalog } from "./offline-sync.js?v=20260922-workflows";
 
 const stage = document.querySelector("#stage");
 let image = document.querySelector("#slideImage");
@@ -64,6 +63,41 @@ const lockOffline = document.querySelector("#lockOffline");
 const offlineModal = document.querySelector("#offlineModal");
 
 let state = null;
+let serverState = null;
+let wakeLock = null;
+const viewerId = globalThis.crypto?.randomUUID?.() || String(Math.random());
+const notice = document.querySelector('#connectionNotice');
+const orderControl = document.querySelector('#playbackOrder');
+function showConnection(message = '') { notice.hidden = !message; notice.querySelector('span').textContent = message; }
+function bookmarkId() { return 'slideshow-position:' + (activeOfflineCatalog?.folderIdentity || folderIdentityFor(makeServerKey(), state)); }
+function savePosition() {
+  if (!images.length) return;
+  try { localStorage.setItem(bookmarkId(), JSON.stringify({order: currentOrder(), keys:images.map(photoKey), current:photoKey(images[index])})); } catch {}
+}
+function currentOrder() { return (mode === 'offline' ? activeOfflineCatalog : state)?.playbackOrder || 'shuffle'; }
+function arrangeCurrent(nextImages) {
+  let bookmark;
+  try { bookmark = JSON.parse(localStorage.getItem(bookmarkId())); } catch {}
+  const result = arrangePhotos(nextImages, currentOrder(), bookmark);
+  images = result.photos; index = result.index;
+}
+async function keepScreenAwake() {
+  if (document.hidden || !images.length) { await wakeLock?.release().catch(()=>{}); wakeLock=null; return; }
+  if (!wakeLock && navigator.wakeLock) { try { wakeLock=await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release',()=>wakeLock=null); } catch {} }
+}
+async function backToLibrary() {
+  savePosition();
+  if (window.chrome?.webview) window.chrome.webview.postMessage('open-library');
+  else if (window.parent !== window) window.parent.postMessage('slide-show-library', location.origin);
+  else if (serverState?.canConfigure) location.href='/#library';
+  else await showStageLibrary();
+}
+document.querySelector('#backLibrary').onclick=backToLibrary;
+document.querySelector('#noticeLibrary').onclick=backToLibrary;
+document.querySelector('#retryPlayback').onclick=async()=>{ try { if(mode==='offline'){await render();return;} await reloadSlideshow(null,{force:true}); startRefreshWatcher(); startViewerHeartbeat(); showConnection(); } catch { showConnection('Cannot reach this PC. Check the connection or open a saved copy in Library.'); } };
+orderControl.onchange=()=>postPlaybackSettings({playbackOrder:orderControl.value});
+document.querySelector('#restartPlayback').onclick=()=>{index=0;render();};
+
 let images = [];
 let index = 0;
 let playing = true;
@@ -98,7 +132,7 @@ function syncStageLibraryButton(catalogs = [], desktopLibraries = getDesktopLibr
   }
 
   const count = catalogs.length + desktopLibraries.length;
-  stageLibrary.hidden = count === 0;
+  stageLibrary.hidden = false;
   const label = count > 1 ? `Open library, ${count} saved slideshows` : "Open library";
   stageLibrary.setAttribute("aria-label", label);
   stageLibrary.title = count > 1 ? `Library (${count})` : "Library";
@@ -172,7 +206,7 @@ function folderNameFromPath(value) {
   return parts[parts.length - 1] || trimmed;
 }
 
-function getDesktopLibraries(currentState = state) {
+function getDesktopLibraries(currentState = serverState || state) {
   if (!currentState?.canConfigure || !Array.isArray(currentState.recentSlideshows)) {
     return [];
   }
@@ -215,18 +249,19 @@ function getCatalogMetadataUpdate(catalog, nextState) {
     folderName: nextState.folderName || catalog.folderName,
     folderPath: nextState.folderPath || "",
     imageMode: nextState.imageMode || catalog.imageMode || "fit",
+    playbackOrder: nextState.playbackOrder || catalog.playbackOrder || "shuffle",
     slideSeconds: nextState.slideSeconds || catalog.slideSeconds || 7,
     backgroundColor: nextState.backgroundColor || catalog.backgroundColor || "#05070a"
   };
 }
 
 function catalogMetadataChanged(catalog, nextCatalog) {
-  return ["folderName", "folderPath", "imageMode", "slideSeconds", "backgroundColor"]
+  return ["folderName", "folderPath", "imageMode", "playbackOrder", "slideSeconds", "backgroundColor"]
     .some(key => catalog[key] !== nextCatalog[key]);
 }
 
 async function fetchJson(path, options) {
-  const response = await fetch(path, { cache: "no-store", ...options });
+  const response = await fetch(path, { cache: "no-store", signal: AbortSignal.timeout(10000), ...options });
   if (!response.ok) {
     throw new Error("Unavailable");
   }
@@ -354,12 +389,12 @@ async function toggleFullscreen() {
 
 async function load() {
   try {
-    state = await fetchJson("/api/state");
-    images = await fetchJson("/api/images?shuffle=true");
+    if (await openRequestedOfflineCatalog()) { fetchJson('/api/state').then(value=>{serverState=value;refreshStageLibraryButton();}).catch(()=>{}); return; }
+    state = serverState = await fetchJson("/api/state");
+    arrangeCurrent(await fetchJson("/api/images?shuffle=false"));
     mode = "online";
     activeOfflineCatalog = null;
     offlineSession = null;
-    index = 0;
     await refreshStageLibraryButton();
     if (await openRequestedOfflineCatalog()) {
       return;
@@ -380,10 +415,15 @@ async function reloadSlideshow(nextState, options = {}) {
 
   isReloading = true;
   try {
-    state = nextState || await fetchJson("/api/state");
-    images = await fetchJson("/api/images?shuffle=true");
-    index = options.keepPosition ? Math.min(index, Math.max(0, images.length - 1)) : 0;
-    await render();
+    savePosition();
+    const previous = images[index] && photoKey(images[index]);
+    const previousFolder = state?.folderPath;
+    state = serverState = nextState || await fetchJson("/api/state");
+    activeOfflineCatalog = null; offlineSession = null;
+    arrangeCurrent(await fetchJson("/api/images?shuffle=false"));
+    if (previous !== (images[index] && photoKey(images[index])) || previousFolder !== state.folderPath || options.force) await render();
+    else { positionText.textContent = `${index + 1} / ${images.length}`; preloadFollowingImage(); }
+    showConnection();
   } finally {
     isReloading = false;
   }
@@ -398,6 +438,7 @@ function startRefreshWatcher() {
 
     try {
       const nextState = await fetchJson("/api/state");
+      serverState = nextState; showConnection();
       if (nextState.version !== state?.version || nextState.folderPath !== state?.folderPath) {
         await reloadSlideshow(nextState);
         showTapFeedback("Switched", "center");
@@ -405,15 +446,14 @@ function startRefreshWatcher() {
       } else if (
         nextState.slideSeconds !== state?.slideSeconds ||
         nextState.backgroundColor !== state?.backgroundColor ||
-        nextState.imageMode !== state?.imageMode
+        nextState.imageMode !== state?.imageMode || nextState.playbackOrder !== state?.playbackOrder
       ) {
-        state = nextState;
-        await render();
+        savePosition(); state = serverState = nextState; arrangeCurrent(images); await render();
       }
     } catch {
-      // Keep the current slideshow running if the local server is briefly unavailable.
+      showConnection('PC disconnected. Reconnect and retry, or choose a saved copy in Library.');
     }
-  }, 1000);
+  }, 5000);
 }
 
 function sendViewerHeartbeat(active = true) {
@@ -424,7 +464,7 @@ function sendViewerHeartbeat(active = true) {
   fetch("/api/viewer-heartbeat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ active }),
+    body: JSON.stringify({ active, viewerId }),
     keepalive: true
   }).catch(() => {});
 }
@@ -446,9 +486,12 @@ function stopViewerHeartbeat() {
 }
 
 document.addEventListener("visibilitychange", () => {
+  keepScreenAwake();
   if (document.visibilityState === "hidden") {
+    clearPlaybackTimer();
     stopViewerHeartbeat();
   } else {
+    schedule();
     startViewerHeartbeat();
   }
 });
@@ -510,6 +553,7 @@ function preloadFollowingImage() {
 }
 
 async function render() {
+  savePosition(); keepScreenAwake();
   clearPlaybackTimer();
   const token = ++renderToken;
   const catalog = activeOfflineCatalog;
@@ -600,7 +644,7 @@ async function render() {
     }, 380);
   } catch {
     if (token === renderToken) {
-      showTapFeedback("Image failed", "center");
+      showConnection('This photo could not be loaded. Retry, or use Next to skip it.');
       schedule();
     }
   }
@@ -768,7 +812,7 @@ async function resolveImageSource(current) {
 function schedule() {
   clearPlaybackTimer();
   updatePlaybackUI();
-  if (!playing || !images.length) {
+  if (document.hidden || !playing || !images.length) {
     return;
   }
 
@@ -823,7 +867,7 @@ function showChrome() {
 function showChromeTemporarily() {
   showChrome();
   chromeTimer = setTimeout(() => {
-    if (settingsPanel.hidden && images.length && playing) {
+    if (settingsPanel.hidden && images.length && playing && !slideshowChrome.contains(document.activeElement)) {
       slideshowChrome.classList.add("hidden");
     }
     updateMouseCursorVisibility();
@@ -871,6 +915,8 @@ function showTapFeedback(value, position) {
 }
 
 function updateSettingsText() {
+  orderControl.value = currentOrder();
+  document.querySelector('#settingsScope').textContent = mode === 'offline' ? 'Only this saved copy' : 'Applies to viewers connected to this PC';
   timerText.textContent = `Advance every ${Math.max(2, currentSlideSeconds())} seconds`;
 }
 
@@ -883,7 +929,8 @@ function updateImageModeButtons() {
 
 function updateOfflinePanel() {
   const available = isCryptoAvailable();
-  saveOffline.disabled = !available || mode !== "online";
+  saveOffline.disabled = !available;
+  saveOffline.textContent = mode === 'offline' && activeOfflineCatalog ? 'Update saved copy' : 'Save offline';
   openOffline.disabled = !available;
   offlineManage.hidden = !activeOfflineCatalog;
   offlineProtection.hidden = !activeOfflineCatalog;
@@ -917,36 +964,21 @@ function applyPlaybackSettingsToView() {
 }
 
 async function postPlaybackSettings(update) {
-  if (mode === "offline") {
-    if (activeOfflineCatalog) {
-      activeOfflineCatalog = {
-        ...activeOfflineCatalog,
-        ...update
-      };
-      await updateCatalog(activeOfflineCatalog);
-    }
-    applyPlaybackSettingsToView();
-    return;
-  }
-
-  state = {
-    ...state,
-    ...update
-  };
-  applyPlaybackSettingsToView();
-
+  savePosition();
   try {
-    const nextState = await fetchJson("/api/playback-settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(update)
-    });
-    state = nextState;
-    applyPlaybackSettingsToView();
-  } catch {
-    updateSettingsText();
-    updateImageModeButtons();
-  }
+    if (mode === 'offline' && activeOfflineCatalog) {
+      const updated = {...activeOfflineCatalog, ...update};
+      await updateCatalog(updated); activeOfflineCatalog=updated;
+    } else {
+      const saved = await fetchJson('/api/playback-settings', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(update)});
+      // A playback response updates preferences; library access comes from /api/state.
+      const preferences = { slideSeconds: saved.slideSeconds, imageMode: saved.imageMode, backgroundColor: saved.backgroundColor, playbackOrder: saved.playbackOrder || state.playbackOrder || 'shuffle' };
+      state = { ...state, ...preferences };
+      serverState = { ...(serverState || state), ...preferences };
+    }
+    if (update.playbackOrder) { arrangeCurrent(images); await render(); }
+    else applyPlaybackSettingsToView();
+  } catch { updateSettingsText(); showConnection('Settings could not be saved. Reconnect and try again.'); }
 }
 
 async function switchFolderWhilePlaying() {
@@ -973,7 +1005,7 @@ async function switchFolderWhilePlaying() {
 
 async function openDesktopLibrary(slideshow) {
   const folderPath = normalizeFolderPath(slideshow?.folderPath);
-  if (!folderPath || !state?.canConfigure) {
+  if (!folderPath || !serverState?.canConfigure) {
     showTapFeedback("Unavailable", "center");
     return;
   }
@@ -993,7 +1025,8 @@ async function openDesktopLibrary(slideshow) {
     mode = "online";
     activeOfflineCatalog = null;
     offlineSession = null;
-    await reloadSlideshow(nextState);
+    await reloadSlideshow(nextState, {force:true});
+    startRefreshWatcher(); startViewerHeartbeat();
     showTapFeedback(images.length ? "Playing" : "Unavailable", "center");
     showChromeTemporarily();
   } catch {
@@ -1013,12 +1046,14 @@ function showModal(html, bind, options = {}) {
   return new Promise(resolve => {
     offlineModal.innerHTML = `<section class="modal-card">${html}</section>`;
     offlineModal.hidden = false;
+    const restoreFocus = document.activeElement;
     updateMouseCursorVisibility();
     const card = offlineModal.querySelector(".modal-card");
     const close = value => {
       offlineModal.removeEventListener("click", handleBackdropClick);
       offlineModal.hidden = true;
       offlineModal.innerHTML = "";
+      restoreFocus?.focus();
       updateMouseCursorVisibility();
       resolve(value);
     };
@@ -1033,6 +1068,7 @@ function showModal(html, bind, options = {}) {
       button.addEventListener("click", () => close(null));
     });
     bind?.(card, close);
+    queueMicrotask(()=>card.querySelector('input, button, select, [tabindex]')?.focus());
   });
 }
 
@@ -1159,34 +1195,47 @@ async function chooseReplacement(catalogs) {
   });
 }
 
-function showProgressModal(title, message) {
+function showProgressModal(title, message, cancellable = false) {
+  const controller = new AbortController();
+  const restoreFocus = document.activeElement;
   offlineModal.innerHTML = `
     <section class="modal-card">
       <h2>${escapeHtml(title)}</h2>
       <p data-progress-message>${escapeHtml(message)}</p>
       <div class="modal-stack">
         <div class="sync-progress"><span data-progress-bar></span></div>
+        ${cancellable ? '<button data-cancel type="button">Cancel download</button>' : ''}
       </div>
     </section>
   `;
   offlineModal.hidden = false;
+  offlineModal.querySelector('[data-cancel]')?.addEventListener('click',()=>{controller.abort();});
+  offlineModal.querySelector('button')?.focus();
   updateMouseCursorVisibility();
   return {
+    signal: controller.signal,
     update(progress) {
       const percent = progress.total ? Math.round((progress.completed / progress.total) * 100) : 0;
+      if (!offlineModal.querySelector('[data-progress-bar]')) return;
       offlineModal.querySelector("[data-progress-bar]").style.width = `${percent}%`;
       offlineModal.querySelector("[data-progress-message]").textContent =
-        `Saved ${progress.completed} of ${progress.total} images - ${etaText(progress.completed, progress.total, progress.elapsedMs)}`;
+        `Saved ${progress.completed} of ${progress.total} images · ${formatBytes(progress.sizeBytes)} · ${etaText(progress.completed, progress.total, progress.elapsedMs)}`;
     },
     close() {
       offlineModal.hidden = true;
       offlineModal.innerHTML = "";
+      restoreFocus?.focus();
       updateMouseCursorVisibility();
     }
   };
 }
 
 async function saveCurrentOffline() {
+  if (mode === 'offline' && activeOfflineCatalog) {
+    const result = await refreshOfflineCatalog(activeOfflineCatalog);
+    if (result.refreshed) await openOfflineCatalog(result.catalog);
+    return;
+  }
   if (!isCryptoAvailable()) {
     await messageModal("HTTPS required", "Open the HTTPS slideshow link to enable encrypted offline playback.");
     return;
@@ -1231,7 +1280,7 @@ async function saveCurrentOffline() {
     }
   }
 
-  const progress = showProgressModal("Saving offline", "Encrypting images on this device.");
+  const progress = showProgressModal("Saving offline", "Encrypting images on this device.", true);
   try {
     const catalog = await syncCatalog({
       state: nextState,
@@ -1239,6 +1288,7 @@ async function saveCurrentOffline() {
       pin,
       protectionKey,
       replaceCatalogId,
+      signal: progress.signal,
       onProgress: value => progress.update(value)
     });
     progress.close();
@@ -1248,7 +1298,7 @@ async function saveCurrentOffline() {
     await refreshStageLibraryButton();
   } catch (error) {
     progress.close();
-    await messageModal("Save failed", error.message || "The offline copy could not be saved.");
+    await messageModal(progress.signal.aborted ? "Download canceled" : "Save failed", progress.signal.aborted ? "Your previous saved copy is unchanged." : error.message || "The offline copy could not be saved.");
   }
 }
 
@@ -1346,9 +1396,11 @@ async function refreshOfflineCatalog(catalog, options = {}) {
   const records = options.records || await getImagesForCatalog(catalog.id);
   if (offlineRecordsMatchSource(records, source.imageList)) {
     const nextCatalog = getCatalogMetadataUpdate(catalog, source.nextState);
-    if (catalogMetadataChanged(catalog, nextCatalog)) {
-      await updateCatalog(nextCatalog);
-      return { catalog: nextCatalog, records, refreshed: false };
+    const dates = new Map(source.imageList.map(image => [image.cacheKey, image.modifiedAt || 0]));
+    const nextRecords = records.map(record => ({ ...record, modifiedAt: dates.get(record.cacheKey) || 0 }));
+    if (catalogMetadataChanged(catalog, nextCatalog) || records.some((record, i) => record.modifiedAt !== nextRecords[i].modifiedAt)) {
+      await saveCatalogBundle(nextCatalog, nextRecords, catalog.protectionMode === "pin" ? null : await getLocalKey(catalog.id));
+      return { catalog: nextCatalog, records: nextRecords, refreshed: true };
     }
     return { catalog, records, refreshed: false };
   }
@@ -1358,13 +1410,14 @@ async function refreshOfflineCatalog(catalog, options = {}) {
     return { catalog, records, refreshed: false };
   }
 
-  const progress = showProgressModal("Refreshing offline", "Updating the encrypted images on this device.");
+  const progress = showProgressModal("Refreshing offline", "Updating the encrypted images on this device.", true);
   try {
     const nextCatalog = await syncCatalog({
       state: source.nextState,
       imageList: source.imageList,
       pin: "",
       protectionKey,
+      signal: progress.signal,
       onProgress: value => progress.update(value)
     });
     const nextRecords = await getImagesForCatalog(nextCatalog.id);
@@ -1397,18 +1450,6 @@ async function openOfflineCatalog(catalog) {
     return;
   }
 
-  const refreshResult = await refreshOfflineCatalog(catalog, {
-    protectionKey: key,
-    records,
-    showErrors: false
-  });
-  catalog = refreshResult.catalog;
-  records = refreshResult.records;
-  if (!records.length) {
-    await messageModal("No saved images", "This catalog has no playable offline images.");
-    return;
-  }
-
   clearInterval(refreshTimer);
   stopViewerHeartbeat();
   mode = "offline";
@@ -1418,14 +1459,14 @@ async function openOfflineCatalog(catalog) {
     ...catalog,
     canConfigure: false
   };
-  images = records.sort(() => Math.random() - 0.5);
-  index = 0;
+  arrangeCurrent(records);
   playing = true;
   await render();
   showChromeTemporarily();
 }
 
 async function showStageLibrary() {
+  fetchJson('/api/state').then(value=>serverState=value).catch(()=>{});
   const desktopLibraries = getDesktopLibraries();
   const catalogs = await listPlayableCatalogs();
   await refreshStageLibraryButton(catalogs);
@@ -1691,6 +1732,7 @@ async function changeCatalogPin(catalog = activeOfflineCatalog, forcedNewPin = u
   let localKey = null;
   let nextCatalog;
 
+  try {
   if (nextPin) {
     const salt = bytesToBase64(randomBytes(16));
     nextKey = await derivePinKey(nextPin, salt, PIN_ITERATIONS);
@@ -1718,7 +1760,6 @@ async function changeCatalogPin(catalog = activeOfflineCatalog, forcedNewPin = u
     };
   }
 
-  try {
     const nextRecords = [];
     for (let recordIndex = 0; recordIndex < records.length; recordIndex += 1) {
       const record = records[recordIndex];
@@ -1737,11 +1778,6 @@ async function changeCatalogPin(catalog = activeOfflineCatalog, forcedNewPin = u
     }
 
     await saveCatalogBundle(nextCatalog, nextRecords, localKey);
-    if (nextPin) {
-      await deleteLocalKey(catalog.id);
-    } else {
-      await saveLocalKey(catalog.id, nextKey);
-    }
 
     progress.close();
     if (activeOfflineCatalog?.id === catalog.id) {
@@ -1851,7 +1887,7 @@ removePinOffline.addEventListener("click", () => removeCatalogPin());
 lockOffline.addEventListener("click", lockActiveOfflineCatalog);
 
 stage.addEventListener("click", event => {
-  if (event.target.closest("button, input")) {
+  if (event.target.closest("button, input, select, label, a")) {
     showChrome();
     return;
   }
@@ -1880,6 +1916,7 @@ stage.addEventListener("click", event => {
     return;
   }
 
+  if (slideshowChrome.classList.contains('hidden')) { showChromeTemporarily(); return; }
   const bounds = stage.getBoundingClientRect();
   const x = event.clientX - bounds.left;
   const third = bounds.width / 3;
@@ -1900,33 +1937,23 @@ stage.addEventListener("click", event => {
 
 stage.addEventListener("pointermove", showChromeTemporarily);
 
-document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && (document.fullscreenElement || document.webkitFullscreenElement)) {
-    const exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
-    Promise.resolve(exitFullscreen?.call(document)).catch(() => {});
-    return;
-  }
-
+document.addEventListener('keydown', event => {
   if (!offlineModal.hidden) {
-    if (event.key === "Escape") {
-      offlineModal.querySelector("[data-cancel]")?.click();
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); offlineModal.querySelector('[data-cancel]')?.click(); }
+    if (event.key === 'Tab') {
+      const controls=[...offlineModal.querySelectorAll('button, input, select, a[href], [tabindex="0"]')].filter(node=>!node.disabled);
+      const first=controls[0],last=controls.at(-1);
+      if (!controls.length) event.preventDefault();
+      else if (event.shiftKey && (document.activeElement===first || !offlineModal.contains(document.activeElement))) {event.preventDefault();last.focus();}
+      else if (!event.shiftKey && (document.activeElement===last || !offlineModal.contains(document.activeElement))) {event.preventDefault();first.focus();}
     }
     return;
   }
-
-  if (event.key === "Escape") {
-    hideSettingsPanel();
-  } else if (event.key === "ArrowRight") {
-    advance(1);
-    showTapFeedback(">", "end");
-  } else if (event.key === "ArrowLeft") {
-    advance(-1);
-    showTapFeedback("<", "start");
-  } else if (event.key === " ") {
-    event.preventDefault();
-    togglePlayback();
-    showTapFeedback(playbackStatusText(), "center");
-  }
+  if(event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||event.target.closest('input, select, textarea, [contenteditable="true"]'))return;
+  if(event.key==='Escape') { if(!settingsPanel.hidden)hideSettingsPanel(); else if(document.fullscreenElement)document.exitFullscreen(); }
+  else if(event.key==='ArrowRight'){event.preventDefault();advance(1);}
+  else if(event.key==='ArrowLeft'){event.preventDefault();advance(-1);}
+  else if(event.key===' '&&!event.target.closest('button')){event.preventDefault();togglePlayback();}
   showChromeTemporarily();
 });
 

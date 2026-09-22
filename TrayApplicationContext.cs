@@ -22,7 +22,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         _startMinimized = startMinimized;
         _settingsStore = new SettingsStore();
         _viewerActivity = new ViewerActivityTracker();
-        _powerAwakeManager = new PowerAwakeManager(_viewerActivity);
+        _powerAwakeManager = new PowerAwakeManager(_viewerActivity, () => _slideshowWindow is { IsDisposed: false, Visible: true });
         _state = new AppState(_settingsStore, _viewerActivity);
         _webServer = new AppWebServer(_state, ChooseFolderAsync, OpenSlideshowWindowAsync);
         _discoveryService = new DiscoveryService(_state);
@@ -120,7 +120,13 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private async Task StartAsync()
     {
-        await _webServer.StartAsync();
+        try { await _webServer.StartAsync(); }
+        catch (Exception error)
+        {
+            MessageBox.Show(error.Message, "Slide Show could not start", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            ExitThread();
+            return;
+        }
         _discoveryService.Start();
         _state.Rescan();
 
@@ -219,7 +225,7 @@ public sealed class TrayApplicationContext : ApplicationContext
                     _slideshowWindow.Dispose();
                 }
 
-                _slideshowWindow = new SlideshowWindow(url);
+                _slideshowWindow = new SlideshowWindow(url, OpenControlCenter);
                 _slideshowWindow.FormClosed += (_, _) =>
                 {
                     _slideshowWindow?.Dispose();
@@ -252,7 +258,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         try
         {
             var snapshot = _state.GetSnapshot(true);
-            var link = snapshot.HttpsEnabled ? snapshot.HttpsDisplaySlideshowUrl : snapshot.DisplaySlideshowUrl;
+            var link = snapshot.DisplaySlideshowUrl;
             Clipboard.SetText(link);
         }
         catch

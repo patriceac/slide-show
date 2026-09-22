@@ -7,7 +7,7 @@
   <title>Slide Show</title>
   <link rel="icon" href="/assets/darkroom-stage.png">
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="stylesheet" href="/assets/slideshow.css?v=20260817-cinematic-player5">
+  <link rel="stylesheet" href="/assets/slideshow.css?v=20260922-workflows">
 </head>
 <body>
   <main id="stage" class="stage">
@@ -22,6 +22,7 @@
     </div>
     <div id="chrome" class="chrome">
       <header class="top-bar">
+        <button id="backLibrary" type="button">← Library</button>
         <div class="viewer-identity">
           <strong id="folderName">Slide Show</strong>
           <span id="positionText">0 / 0</span>
@@ -62,14 +63,18 @@
         </button>
       </header>
       <p id="timerText"></p>
+      <p id="settingsScope" class="panel-label"></p>
+      <label for="playbackOrder">Photo order</label>
+      <select id="playbackOrder"><option value="shuffle">Shuffle</option><option value="name">File name (A–Z)</option><option value="date">Date modified (oldest first)</option></select>
+      <button id="restartPlayback" type="button">Start from beginning</button>
       <div class="panel-controls" aria-label="Timer controls">
         <button id="slower" type="button">- 1 sec</button>
         <button id="faster" type="button">+ 1 sec</button>
       </div>
       <p class="panel-label">Image size</p>
       <div class="panel-controls" aria-label="Image size controls">
-        <button id="fitMode" type="button">Fit</button>
-        <button id="fullMode" type="button">Full</button>
+        <button id="fitMode" type="button">Show entire photo</button>
+        <button id="fullMode" type="button">Fill screen (crops)</button>
       </div>
       <div id="switchFolderGroup" class="switch-folder-group" hidden>
         <p class="panel-label">Slideshow</p>
@@ -94,9 +99,10 @@
       </div>
     </section>
     <div id="slideProgress" class="slide-progress" aria-hidden="true"><span></span></div>
+    <div id="connectionNotice" class="connection-notice" role="status" hidden><span></span><button id="retryPlayback">Retry</button><button id="noticeLibrary">Library</button></div>
     <div id="tapFeedback" class="tap-feedback" aria-hidden="true" hidden></div>
     <div id="offlineModal" class="offline-modal" role="dialog" aria-modal="true" hidden></div>
   </main>
-  <script type="module" src="/assets/slideshow.js?v=20260817-cinematic-player5"></script>
+  <script type="module" src="/assets/slideshow.js?v=20260922-workflows"></script>
 </body>
 </html>

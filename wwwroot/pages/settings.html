@@ -1,251 +1,189 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#176c5f">
-  <title>Slide Show</title>
-  <link rel="icon" href="/assets/darkroom-stage.png">
-  <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="stylesheet" href="/assets/styles.css?v=20260629-landing-libraries">
-</head>
-<body class="settings-page">
-  <main class="shell">
-    <header class="topbar">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" focusable="false">
-            <rect x="3.5" y="4" width="17" height="12" rx="2"></rect>
-            <path d="M9 20h6M12 16v4"></path>
-            <path d="m10 8 5 2.8-5 2.8z"></path>
-          </svg>
-        </span>
-        <div>
-          <h1>Slide Show</h1>
-          <p>Local slideshow server</p>
-        </div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#176c5f" />
+    <title>Slide Show · Library</title>
+    <link rel="icon" href="/assets/darkroom-stage.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260922-workflows" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="#library">Slide Show</a>
+        <nav aria-label="Main">
+          <button id="openLibrary" class="text-button">Library</button
+          ><span id="statusPill" role="status">Connecting…</span>
+        </nav>
+      </header>
+      <div id="connectionError" class="notice" hidden>
+        <span
+          >Cannot reach Slide Show. Open the app from the system tray, then
+          retry.</span
+        ><button id="retry">Retry</button>
       </div>
-      <div class="topbar-actions">
-        <span class="status-pill" id="statusPill">
-          <span class="status-dot" aria-hidden="true"></span>
-          Running
-        </span>
-        <a id="openShow" class="primary-button hero-action" href="/show">
-          <span>Play current</span>
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="m8 5 11 7-11 7z"></path>
-          </svg>
-        </a>
-      </div>
-    </header>
-
-    <div class="dashboard-grid">
-      <section class="stage-panel" aria-labelledby="stageTitle">
+      <section class="current" aria-labelledby="currentSlideshowName">
         <div class="stage-media">
-          <img id="stagePreview" alt="">
-          <div class="stage-fallback" aria-hidden="true"></div>
-          <div class="stage-label">
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <rect x="4" y="5" width="16" height="11" rx="2"></rect>
-              <path d="M8 20h8M12 16v4"></path>
-            </svg>
-            <span id="stageTitle">Slideshow stage</span>
+          <img id="stagePreview" alt="Preview of selected photos" hidden />
+          <div id="stageEmpty">
+            <span aria-hidden="true">▧</span>
+            <p>Your photos appear here</p>
           </div>
-
-          <section class="source-card" aria-labelledby="currentSlideshowName">
-            <div class="folder-layout">
-              <div class="folder-main">
-                <div class="panel-heading">
-                  <span class="folder-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" focusable="false">
-                      <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"></path>
-                    </svg>
-                  </span>
-                  <div>
-                    <p class="eyebrow">Current slideshow</p>
-                    <h2 id="currentSlideshowName">No slideshow selected</h2>
-                    <p id="currentFolderDetail" class="folder-detail">Choose an image folder to begin.</p>
-                  </div>
-                </div>
-                <label class="field folder-path-field">
-                  <span>Location</span>
-                  <input id="folderPath" type="text" placeholder="No folder selected" readonly>
-                </label>
-              </div>
-              <div class="source-actions">
-                <button id="playCurrent" class="primary-button source-play-button" type="button">
-                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path d="m8 5 11 7-11 7z"></path>
-                  </svg>
-                  <span>Play</span>
-                </button>
-                <button id="chooseFolder" class="secondary-button folder-button" type="button">
-                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"></path>
-                  </svg>
-                  <span>Switch folder</span>
-                </button>
-              </div>
-            </div>
-
-            <div class="folder-footer">
-              <div class="meta-grid">
-                <div>
-                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <rect x="4" y="5" width="16" height="14" rx="2"></rect>
-                    <path d="m4 15 4-4 4 4 2-2 6 6"></path>
-                    <circle cx="15.5" cy="9.5" r="1.5"></circle>
-                  </svg>
-                  <span><strong id="imageCount">0</strong> images</span>
-                </div>
-                <div>
-                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <circle cx="12" cy="12" r="8"></circle>
-                    <path d="M12 7v5l3 2"></path>
-                  </svg>
-                  <span>Last scan: <strong id="lastScan">Not scanned yet</strong></span>
-                </div>
-              </div>
-              <p class="state-message" id="scanMessage"></p>
-              <div class="button-row">
-                <button id="rescan" class="secondary-button">
-                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                    <path d="M20 12a8 8 0 0 1-13.7 5.7"></path>
-                    <path d="M4 12A8 8 0 0 1 17.7 6.3"></path>
-                    <path d="M7 18H4v3"></path>
-                    <path d="M17 6h3V3"></path>
-                  </svg>
-                  <span>Rescan</span>
-                </button>
-              </div>
-            </div>
-
-            <section class="library-section" aria-labelledby="libraryTitle">
-              <div class="library-heading">
-                <h3 id="libraryTitle">Libraries</h3>
-                <button id="openLibrary" class="secondary-button" type="button">Library</button>
-              </div>
-              <div id="libraryList" class="library-list" aria-live="polite"></div>
-            </section>
-          </section>
         </div>
-      </section>
-
-      <aside class="side-stack">
-        <section class="panel playback-panel" aria-labelledby="playbackTitle">
-          <div class="panel-heading">
-            <span class="panel-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" focusable="false">
-                <circle cx="12" cy="12" r="8"></circle>
-                <path d="m10 8 6 4-6 4z"></path>
-              </svg>
-            </span>
-            <div>
-              <p class="eyebrow">Playback</p>
-              <h2 id="playbackTitle">Slideshow settings</h2>
-            </div>
+        <div class="source">
+          <p class="eyebrow">Selected folder</p>
+          <h1 id="currentSlideshowName">Choose your photos</h1>
+          <p id="currentFolderDetail">
+            Choose a folder on this PC to start a slideshow.
+          </p>
+          <p id="folderPath" class="path"></p>
+          <p class="meta">
+            <strong id="imageCount">0</strong> photos · Checked
+            <span id="lastScan">never</span>
+          </p>
+          <p id="scanMessage" class="notice" hidden></p>
+          <div class="button-row">
+            <button id="playCurrent" class="primary-button" disabled>
+              Play here</button
+            ><button id="chooseFolder">Choose photos</button>
           </div>
-
-          <div class="settings-grid">
-            <label class="field">
-              <span>Seconds per slide</span>
-              <span class="stepper">
-                <input id="slideSeconds" type="number" min="2" max="120" step="1">
-                <button type="button" class="step-button" data-step-target="slideSeconds" data-step="-1" aria-label="Decrease seconds per slide">-</button>
-                <button type="button" class="step-button" data-step-target="slideSeconds" data-step="1" aria-label="Increase seconds per slide">+</button>
-              </span>
-            </label>
-            <label class="field">
-              <span>Mobile sync workers</span>
-              <span class="stepper">
-                <input id="syncWorkers" type="number" min="2" max="4" step="1">
-                <button type="button" class="step-button" data-step-target="syncWorkers" data-step="-1" aria-label="Decrease sync workers">-</button>
-                <button type="button" class="step-button" data-step-target="syncWorkers" data-step="1" aria-label="Increase sync workers">+</button>
-              </span>
-            </label>
-          </div>
-
-          <label class="field background-field">
-            <span>Background</span>
-            <span class="color-control">
-              <input id="backgroundColor" type="color">
-              <span id="backgroundValue">#05070a</span>
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="m6 9 6 6 6-6"></path>
-              </svg>
-            </span>
-          </label>
-
-          <fieldset class="segmented">
-            <legend>Image size</legend>
-            <label>
-              <input type="radio" name="imageMode" value="fit">
-              <span>Fit</span>
-            </label>
-            <label>
-              <input type="radio" name="imageMode" value="full">
-              <span>Full</span>
-            </label>
-          </fieldset>
-
-          <label class="toggle-row">
-            <input id="includeSubfolders" type="checkbox">
-            <span>
-              <strong>Include subfolders</strong>
-              <small>Include images from subfolders when scanning.</small>
-            </span>
-          </label>
-
-          <div class="settings-actions">
-            <button id="saveSettings" class="secondary-button save-button">
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="m5 12 4 4L19 6"></path>
-              </svg>
-              <span>Save changes</span>
+          <div class="button-row">
+            <button id="watchDevice" class="text-button" disabled>
+              Watch on another device ↗</button
+            ><button id="rescan" class="text-button">
+              Check for new photos
             </button>
           </div>
-        </section>
-
-        <section class="panel system-panel" aria-labelledby="systemTitle">
-          <div class="panel-heading">
-            <span class="panel-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" focusable="false">
-                <rect x="4" y="5" width="16" height="11" rx="2"></rect>
-                <path d="M8 20h8M12 16v4"></path>
-              </svg>
-            </span>
-            <div>
-              <p class="eyebrow">System</p>
-              <h2 id="systemTitle">Tray and startup</h2>
-            </div>
+          <p class="hint">
+            JPG, PNG, WebP, GIF, BMP, AVIF and SVG. Convert HEIC/HEIF first.
+          </p>
+        </div>
+      </section>
+      <section
+        id="library"
+        class="library-section"
+        aria-labelledby="libraryTitle"
+        tabindex="-1"
+      >
+        <div class="section-heading">
+          <h2 id="libraryTitle">Library</h2>
+          <p>PC folders and copies saved in this browser</p>
+        </div>
+        <div id="libraryList" class="library-list"></div>
+      </section>
+      <form id="settingsForm">
+        <details class="settings-section" open>
+          <summary>Playback settings</summary>
+          <p class="hint">
+            Applies to slideshows connected to this PC. Saved copies keep their
+            own settings.
+          </p>
+          <div class="settings-grid">
+            <label
+              >Seconds per photo<input
+                id="slideSeconds"
+                type="number"
+                min="2"
+                max="120"
+                step="1"
+                required
+            /></label>
+            <label
+              >Photo order<select id="playbackOrder">
+                <option value="shuffle">Shuffle</option>
+                <option value="name">File name (A–Z)</option>
+                <option value="date">Date modified (oldest first)</option>
+              </select></label
+            >
+            <label
+              >Photo size<select id="imageMode">
+                <option value="fit">Show entire photo</option>
+                <option value="full">Fill screen (crops edges)</option>
+              </select></label
+            ><label
+              >Background<input id="backgroundColor" type="color"
+            /></label>
           </div>
-          <label class="toggle-row">
-            <input id="startAtLogin" type="checkbox">
-            <span>
-              <strong>Start at login</strong>
-              <small>The app stays in the system tray while the slideshow server runs.</small>
-            </span>
-          </label>
-        </section>
-      </aside>
-
-    </div>
-
-    <footer class="server-footer">
-      <span class="footer-status">
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <path d="M12 3 5 6v5c0 4.5 3 8.5 7 10 4-1.5 7-5.5 7-10V6z"></path>
-          <path d="m9 12 2 2 4-5"></path>
-        </svg>
-        Server is running
-      </span>
-      <span class="footer-divider"></span>
-      <span>Port <strong id="serverPort">5177</strong></span>
-      <span class="footer-divider"></span>
-      <span class="footer-link">Open in browser: <a id="footerShowUrl" href="/show">/show</a></span>
-    </footer>
-  </main>
-  <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="/assets/control.js?v=20260629-landing-libraries"></script>
-</body>
+          <label class="toggle-row"
+            ><input id="includeSubfolders" type="checkbox" />Include photos from
+            subfolders</label
+          >
+        </details>
+        <details class="settings-section">
+          <summary>Startup and connection</summary>
+          <label class="toggle-row"
+            ><input id="startAtLogin" type="checkbox" />Start Slide Show when I
+            sign in to Windows</label
+          ><label class="workers"
+            >Simultaneous offline downloads<input
+              id="syncWorkers"
+              type="number"
+              min="2"
+              max="4"
+              step="1"
+              required
+          /></label>
+          <p class="hint">
+            Server port <span id="serverPort">5177</span>. Use “Watch on another
+            device” above to connect.
+          </p>
+        </details>
+        <div class="save-row">
+          <button id="saveSettings" class="primary-button" disabled>
+            Save changes</button
+          ><button id="discardSettings" type="button" hidden>
+            Discard changes</button
+          ><span id="saveStatus" role="status"></span>
+        </div>
+      </form>
+      <footer>
+        Closing this tab keeps Slide Show running. Use its system tray menu to
+        quit.
+      </footer>
+    </main>
+    <dialog id="deviceDialog" aria-labelledby="deviceTitle">
+      <form method="dialog">
+        <button class="dialog-close" aria-label="Close">×</button>
+      </form>
+      <h2 id="deviceTitle">Watch on another device</h2>
+      <p>
+        Connect both devices to the same Wi-Fi. Open this address in the other
+        device’s browser, or paste it into the Android app.
+      </p>
+      <label for="deviceAddress"
+        >Address on <strong id="computerName">this PC</strong></label
+      >
+      <div class="copy-row">
+        <input id="deviceAddress" readonly /><button
+          id="copyAddress"
+          class="primary-button"
+        >
+          Copy link
+        </button>
+      </div>
+      <p id="deviceStatus" role="status"></p>
+      <details>
+        <summary>Connection help</summary>
+        <p>
+          Keep this PC awake and Slide Show running. If the address does not
+          open, check that Windows Firewall allows Slide Show on your private
+          network.
+        </p>
+        <label
+          >Try another network address<select id="networkAddress"></select
+        ></label>
+        <p>
+          Android can save photos for offline use. Browser offline saving
+          requires a secure connection.
+        </p>
+      </details>
+    </dialog>
+    <div class="toast" id="toast" role="status"></div>
+    <script
+      type="module"
+      src="/assets/control.js?v=20260922-workflows"
+    ></script>
+  </body>
 </html>

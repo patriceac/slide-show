@@ -6,16 +6,15 @@ import {
   encryptBlob,
   generateLocalKey,
   randomBytes
-} from "./offline-crypto.js?v=20260529-offline2";
+} from "./offline-crypto.js?v=20260922-workflows";
 import {
   MAX_CATALOGS,
-  deleteCatalog,
   findCatalogByIdentity,
   folderIdentityFor,
   listCatalogs,
   makeServerKey,
   saveCatalogBundle
-} from "./offline-store.js?v=20260529-offline2";
+} from "./offline-store.js?v=20260922-workflows";
 
 function cleanName(value, fallback = "Slide Show") {
   return (value || "").trim() || fallback;
@@ -41,13 +40,20 @@ export async function syncCatalog({
   pin,
   protectionKey,
   replaceCatalogId,
-  onProgress
+  onProgress,
+  signal
 }) {
   if (!Array.isArray(imageList) || imageList.length === 0) {
     throw new Error("No images are available to save.");
   }
 
   const plan = await getSyncPlan(state);
+  signal?.throwIfAborted();
+  const estimate = await navigator.storage?.estimate?.();
+  const requiredBytes = imageList.reduce((sum, image) => sum + (image.sizeBytes || 0) + 64, 0);
+  if (estimate?.quota && requiredBytes > estimate.quota - estimate.usage) {
+    throw new Error("Not enough storage for this copy. Free space or choose a smaller folder. Your existing saved photos are unchanged.");
+  }
   const targetId = replaceCatalogId || plan.existing?.id || crypto.randomUUID();
   const preserveExistingProtection = Boolean(protectionKey && plan.existing);
   const preserveExistingPin = preserveExistingProtection && plan.existing.protectionMode === "pin";
@@ -84,7 +90,8 @@ export async function syncCatalog({
 
   for (let index = 0; index < imageList.length; index += 1) {
     const image = imageList[index];
-    const response = await fetch(image.url, { cache: "no-store" });
+    signal?.throwIfAborted();
+    const response = await fetch(image.url, { cache: "no-store", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60000)]) : AbortSignal.timeout(60000) });
     if (!response.ok) {
       throw new Error(`Could not save ${image.name || "image"}.`);
     }
@@ -98,6 +105,7 @@ export async function syncCatalog({
       order: index,
       cacheKey,
       name: cleanName(image.name, "Image"),
+      modifiedAt: image.modifiedAt || 0,
       mimeType: clearBlob.type || response.headers.get("Content-Type") || "application/octet-stream",
       encryptedBlob: encrypted.encryptedBlob,
       iv: encrypted.iv,
@@ -111,14 +119,13 @@ export async function syncCatalog({
         completed: index + 1,
         total: imageList.length,
         name: record.name,
+        sizeBytes,
         elapsedMs: performance.now() - startedAt
       });
     }
   }
 
-  if (replaceCatalogId && replaceCatalogId !== plan.existing?.id) {
-    await deleteCatalog(replaceCatalogId);
-  }
+  signal?.throwIfAborted();
 
   const now = Date.now();
   const catalog = {
@@ -131,6 +138,7 @@ export async function syncCatalog({
     folderIdentity: plan.folderIdentity,
     serverVersion: state.version || 0,
     imageMode: state.imageMode || "fit",
+    playbackOrder: state.playbackOrder || "shuffle",
     slideSeconds: state.slideSeconds || 7,
     backgroundColor: state.backgroundColor || "#05070a",
     imageCount: imageRecords.length,

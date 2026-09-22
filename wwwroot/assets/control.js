@@ -1,559 +1,354 @@
-import { isCryptoAvailable } from "./offline-crypto.js?v=20260529-offline2";
-import { listCatalogs } from "./offline-store.js?v=20260529-offline2";
+import { listCatalogs } from "./offline-store.js?v=20260922-workflows";
+const $ = (id) => document.getElementById(id);
+const settingNames = [
+  "slideSeconds",
+  "syncWorkers",
+  "backgroundColor",
+  "imageMode",
+  "playbackOrder",
+  "includeSubfolders",
+  "startAtLogin",
+];
+let currentState,
+  baseline,
+  previewVersion,
+  librarySignature,
+  slideshowOverlay,
+  toastTimer;
+let busy = false,
+  refreshing = false;
 
-const fields = {
-  statusPill: document.querySelector("#statusPill"),
-  openShow: document.querySelector("#openShow"),
-  openLibrary: document.querySelector("#openLibrary"),
-  playCurrent: document.querySelector("#playCurrent"),
-  chooseFolder: document.querySelector("#chooseFolder"),
-  currentSlideshowName: document.querySelector("#currentSlideshowName"),
-  currentFolderDetail: document.querySelector("#currentFolderDetail"),
-  folderPath: document.querySelector("#folderPath"),
-  imageCount: document.querySelector("#imageCount"),
-  lastScan: document.querySelector("#lastScan"),
-  scanMessage: document.querySelector("#scanMessage"),
-  libraryList: document.querySelector("#libraryList"),
-  saveSettings: document.querySelector("#saveSettings"),
-  rescan: document.querySelector("#rescan"),
-  slideSeconds: document.querySelector("#slideSeconds"),
-  syncWorkers: document.querySelector("#syncWorkers"),
-  backgroundColor: document.querySelector("#backgroundColor"),
-  imageMode: Array.from(document.querySelectorAll("input[name='imageMode']")),
-  includeSubfolders: document.querySelector("#includeSubfolders"),
-  startAtLogin: document.querySelector("#startAtLogin"),
-  backgroundValue: document.querySelector("#backgroundValue"),
-  stagePreview: document.querySelector("#stagePreview"),
-  serverPort: document.querySelector("#serverPort"),
-  footerShowUrl: document.querySelector("#footerShowUrl"),
-  toast: document.querySelector("#toast")
-};
-
-let currentState = null;
-let toastTimer = null;
-let hasUnsavedChanges = false;
-let slideshowOverlay = null;
-
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...options
-  });
-
-  if (!response.ok) {
-    throw new Error("That change can only be made on this computer.");
-  }
-
-  return response.json();
-}
-
-function showToast(message) {
-  fields.toast.textContent = message;
-  fields.toast.classList.add("show");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => fields.toast.classList.remove("show"), 2200);
-}
-
-function formatScanTime(value) {
-  if (!value) {
-    return "Not scanned yet";
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-    month: "short",
-    day: "numeric"
-  }).format(new Date(value));
-}
-
-function formatRecentTime(value) {
-  if (!value) {
-    return "Last used recently";
-  }
-
-  return `Last used ${new Intl.DateTimeFormat(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-    month: "short",
-    day: "numeric"
-  }).format(new Date(value))}`;
-}
-
-function formatBytes(bytes) {
-  if (!bytes) {
-    return "0 B";
-  }
-
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
-}
-
-function formatCatalogDate(value) {
-  if (!value) {
-    return "not synced";
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-    month: "short",
-    day: "numeric"
-  }).format(new Date(value));
-}
-
-function folderNameFromPath(value) {
-  const trimmed = normalizeFolderPath(value).replace(/[\\/]+$/, "");
-  if (!trimmed) {
-    return "";
-  }
-
-  const parts = trimmed.split(/[\\/]+/);
-  return parts[parts.length - 1] || trimmed;
-}
-
-function render(state) {
-  currentState = state;
-  const hasFolder = Boolean(normalizeFolderPath(state.folderPath));
-  const slideshowName = state.folderName || folderNameFromPath(state.folderPath) || "No slideshow selected";
-  fields.statusPill.textContent = "Running";
-  fields.openShow.href = state.localSlideshowUrl || "/show";
-  fields.openShow.classList.toggle("is-disabled", !hasFolder);
-  fields.openShow.setAttribute("aria-disabled", String(!hasFolder));
-  fields.playCurrent.disabled = !hasFolder;
-  fields.currentSlideshowName.textContent = slideshowName;
-  fields.currentFolderDetail.textContent = hasFolder
-    ? "This is the slideshow that will play on desktop."
-    : "Choose an image folder to begin.";
-  fields.folderPath.value = state.folderPath || "";
-  fields.imageCount.textContent = state.imageCount.toLocaleString();
-  fields.lastScan.textContent = formatScanTime(state.lastScannedAt);
-  fields.scanMessage.textContent = state.scanMessage || (state.imageCount === 0 && state.folderPath ? "No supported images found in this folder." : "");
-  fields.slideSeconds.value = state.slideSeconds;
-  fields.syncWorkers.value = state.syncWorkers || 4;
-  fields.backgroundColor.value = state.backgroundColor;
-  if (fields.backgroundValue) {
-    fields.backgroundValue.textContent = state.backgroundColor;
-  }
-  setImageMode(state.imageMode || "fit");
-  fields.includeSubfolders.checked = state.includeSubfolders;
-  fields.startAtLogin.checked = state.startAtLogin;
-  if (fields.serverPort) {
-    fields.serverPort.textContent = state.port;
-  }
-  if (fields.footerShowUrl) {
-    const showUrl = state.httpsEnabled ? state.httpsDisplaySlideshowUrl : state.localSlideshowUrl;
-    fields.footerShowUrl.href = showUrl || "/show";
-    fields.footerShowUrl.textContent = showUrl || "/show";
-  }
-  renderLibraries(state);
-  setSavePending(false);
-}
-
-async function getOfflineCatalogs() {
-  if (!isCryptoAvailable()) {
-    return [];
-  }
-
+async function api(path, payload) {
+  let response;
   try {
-    return await listCatalogs();
+    response = await fetch(path, {
+      signal: AbortSignal.timeout(15000),
+      ...(payload !== undefined
+        ? {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          }
+        : {}),
+    });
   } catch {
-    return [];
-  }
-}
-
-async function renderLibraries(state) {
-  fields.libraryList.replaceChildren();
-  const currentPath = normalizeFolderPath(state.folderPath).toLowerCase();
-  const recent = Array.isArray(state.recentSlideshows)
-    ? state.recentSlideshows.filter(slideshow => normalizeFolderPath(slideshow.folderPath))
-    : [];
-  const offlineCatalogs = await getOfflineCatalogs();
-
-  if (currentState !== state) {
-    return;
-  }
-
-  if (recent.length === 0 && offlineCatalogs.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "library-empty";
-    empty.textContent = "Libraries will appear here after you choose or save a slideshow.";
-    fields.libraryList.append(empty);
-    return;
-  }
-
-  recent.slice(0, 4).forEach(slideshow => {
-    const folderPath = normalizeFolderPath(slideshow.folderPath);
-    const isCurrent = currentPath && folderPath.toLowerCase() === currentPath;
-    const row = document.createElement("article");
-    row.className = `library-row${isCurrent ? " is-current" : ""}`;
-
-    const details = document.createElement("div");
-    const title = document.createElement("h4");
-    title.textContent = slideshow.folderName || folderNameFromPath(folderPath) || "Slideshow";
-    const meta = document.createElement("p");
-    meta.textContent = `${isCurrent ? "Current - " : ""}${formatRecentTime(slideshow.lastUsedAt)} - ${folderPath}`;
-    details.append(title, meta);
-
-    const actions = document.createElement("div");
-    actions.className = "library-actions";
-
-    const playButton = document.createElement("button");
-    playButton.type = "button";
-    playButton.className = "primary-button";
-    playButton.textContent = isCurrent && state.imageCount === 0 ? "Retry" : "Play";
-    playButton.addEventListener("click", () => selectRecentSlideshow(folderPath, true));
-    actions.append(playButton);
-
-    row.append(details, actions);
-    fields.libraryList.append(row);
-  });
-
-  offlineCatalogs.slice(0, 4).forEach(catalog => {
-    const row = document.createElement("article");
-    row.className = "library-row";
-
-    const details = document.createElement("div");
-    const title = document.createElement("h4");
-    title.textContent = catalog.displayName || "Offline slideshow";
-    const meta = document.createElement("p");
-    const protection = catalog.protectionMode === "pin" ? "PIN protected" : "local key";
-    meta.textContent = `${catalog.imageCount || 0} images - ${protection} - ${formatBytes(catalog.sizeBytes)} - ${formatCatalogDate(catalog.syncedAt)}`;
-    details.append(title, meta);
-
-    const actions = document.createElement("div");
-    actions.className = "library-actions";
-    const playButton = document.createElement("button");
-    playButton.type = "button";
-    playButton.className = "primary-button";
-    playButton.textContent = "Play";
-    playButton.addEventListener("click", () => openOfflineSlideshow(catalog.id));
-    actions.append(playButton);
-
-    row.append(details, actions);
-    fields.libraryList.append(row);
-  });
-}
-
-function getImageMode() {
-  return fields.imageMode.find(field => field.checked)?.value || "fit";
-}
-
-function setImageMode(value) {
-  const mode = value === "full" ? "full" : "fit";
-  fields.imageMode.forEach(field => {
-    field.checked = field.value === mode;
-  });
-}
-
-function getSettingsPayload() {
-  return {
-    includeSubfolders: fields.includeSubfolders.checked,
-    slideSeconds: Number(fields.slideSeconds.value),
-    syncWorkers: Number(fields.syncWorkers.value),
-    backgroundColor: fields.backgroundColor.value,
-    imageMode: getImageMode(),
-    startAtLogin: fields.startAtLogin.checked
-  };
-}
-
-function normalizeFolderPath(value) {
-  return (value || "").trim();
-}
-
-function normalizeColor(value) {
-  return (value || "").toLowerCase();
-}
-
-async function refresh() {
-  render(await api("/api/state"));
-}
-
-function setSavePending(pending) {
-  hasUnsavedChanges = pending;
-  fields.saveSettings.disabled = !pending;
-}
-
-function markUnsavedChanges() {
-  if (currentState) {
-    const payload = getSettingsPayload();
-    setSavePending(
-      payload.includeSubfolders !== currentState.includeSubfolders ||
-      payload.slideSeconds !== currentState.slideSeconds ||
-      payload.syncWorkers !== (currentState.syncWorkers || 4) ||
-      normalizeColor(payload.backgroundColor) !== normalizeColor(currentState.backgroundColor) ||
-      payload.imageMode !== (currentState.imageMode || "fit") ||
-      payload.startAtLogin !== currentState.startAtLogin
+    throw new Error(
+      "Cannot reach Slide Show. Check that the app is running, then retry.",
     );
   }
+  if (!response.ok)
+    throw new Error(
+      response.status === 403
+        ? "Choose folders and change startup settings on the PC running Slide Show."
+        : `Slide Show could not complete this action (${response.status}). Please retry.`,
+    );
+  return response.status === 204 ? null : response.json();
 }
-
-function setChooseFolderLabel(label) {
-  const labelElement = fields.chooseFolder.querySelector("span");
-  if (labelElement) {
-    labelElement.textContent = label;
-  } else {
-    fields.chooseFolder.textContent = label;
+function showToast(message) {
+  $("toast").textContent = message;
+  $("toast").classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $("toast").classList.remove("show"), 4000);
+}
+function values() {
+  return Object.fromEntries(
+    settingNames.map((name) => [
+      name,
+      $(name).type === "checkbox"
+        ? $(name).checked
+        : $(name).type === "number"
+          ? Number($(name).value)
+          : $(name).value,
+    ]),
+  );
+}
+function applyValues(value) {
+  for (const name of settingNames) {
+    if ($(name).type === "checkbox") $(name).checked = Boolean(value[name]);
+    else $(name).value = value[name];
   }
 }
-
-function removeSlideshowOverlay() {
-  if (!slideshowOverlay) {
-    return;
+function dirty() {
+  return baseline && JSON.stringify(values()) !== JSON.stringify(baseline);
+}
+function pending() {
+  $("saveSettings").disabled = busy || !dirty();
+  $("discardSettings").hidden = !dirty();
+  $("saveStatus").textContent = dirty() ? "Unsaved changes" : "";
+}
+function date(value) {
+  return value
+    ? new Date(value).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+    : "never";
+}
+function folderName(path) {
+  return (path || "")
+    .replace(/[\\/]+$/, "")
+    .split(/[\\/]/)
+    .pop();
+}
+function render(state, saved = false) {
+  const draft = !saved && dirty() ? values() : null;
+  currentState = state;
+  baseline = Object.fromEntries(
+    settingNames.map((name) => [
+      name,
+      state[name] ??
+        { playbackOrder: "shuffle", syncWorkers: 4, imageMode: "fit" }[name],
+    ]),
+  );
+  applyValues(draft || baseline);
+  pending();
+  $("statusPill").textContent = "Connected";
+  $("connectionError").hidden = true;
+  $("currentSlideshowName").textContent =
+    state.folderName || folderName(state.folderPath) || "Choose your photos";
+  $("currentFolderDetail").textContent = state.folderPath
+    ? state.imageCount
+      ? "Ready to watch here or on another device."
+      : "Choose a folder containing supported photos."
+    : "Choose a folder on this PC to start a slideshow.";
+  $("folderPath").textContent = state.folderPath || "";
+  $("imageCount").textContent = (state.imageCount || 0).toLocaleString();
+  $("lastScan").textContent = date(state.lastScannedAt);
+  $("scanMessage").textContent = state.scanMessage || "";
+  $("scanMessage").hidden = !state.scanMessage;
+  $("playCurrent").disabled = !state.imageCount;
+  $("playCurrent").classList.toggle("primary-button", Boolean(state.imageCount));
+  $("chooseFolder").classList.toggle("primary-button", !state.imageCount);
+  $("watchDevice").disabled = !state.imageCount;
+  $("chooseFolder").textContent = state.folderPath
+    ? "Change folder"
+    : "Choose photos";
+  $("chooseFolder").disabled = !state.canConfigure;
+  $("rescan").disabled = !state.canConfigure || !state.folderPath;
+  $("serverPort").textContent = state.port;
+  $("computerName").textContent = state.computerName || "this PC";
+  $("deviceStatus").textContent =
+    `${state.connectedViewers || 0} connected viewer${state.connectedViewers === 1 ? "" : "s"}`;
+  const addresses = state.lanSlideshowUrls?.length
+    ? state.lanSlideshowUrls
+    : [
+        state.displaySlideshowUrl ||
+          state.localSlideshowUrl ||
+          location.origin + "/show",
+      ];
+  const selected = $("networkAddress").value;
+  $("networkAddress").replaceChildren(
+    ...addresses.map((address) => new Option(address, address)),
+  );
+  $("networkAddress").value = addresses.includes(selected)
+    ? selected
+    : addresses[0];
+  $("deviceAddress").value = $("networkAddress").value;
+  updatePreview(state);
+  renderLibraries(state);
+}
+async function updatePreview(state) {
+  const signature = `${state.folderPath}:${state.version}`;
+  if (signature === previewVersion) return;
+  previewVersion = signature;
+  $("stagePreview").hidden = true;
+  $("stageEmpty").hidden = false;
+  if (!state.imageCount) return;
+  try {
+    const images = await api("/api/images?shuffle=false");
+    if (previewVersion !== signature || !images.length) return;
+    const img = $("stagePreview");
+    img.onload = () => {
+      if (previewVersion === signature) {
+        img.hidden = false;
+        $("stageEmpty").hidden = true;
+      }
+    };
+    img.onerror = () => {
+      img.hidden = true;
+      $("stageEmpty").hidden = false;
+      $("stageEmpty").querySelector("p").textContent =
+        "Preview unavailable — try another photo";
+    };
+    img.src = images[0].url;
+    img.alt = images[0].name;
+  } catch {
+    previewVersion = null;
   }
-
-  slideshowOverlay.remove();
+}
+async function renderLibraries(state) {
+  const catalogs = await listCatalogs().catch(() => []);
+  if (state !== currentState) return;
+  const recent = state.recentSlideshows || [],
+    signature = JSON.stringify([recent, catalogs, state.folderPath]);
+  if (signature === librarySignature) return;
+  librarySignature = signature;
+  $("libraryList").replaceChildren();
+  const row = (name, meta, label, action, current = false) => {
+    const element = document.createElement("article");
+    element.className = "library-row" + (current ? " is-current" : "");
+    const details = document.createElement("div"),
+      title = document.createElement("h3"),
+      description = document.createElement("p"),
+      button = document.createElement("button");
+    title.textContent = name;
+    description.textContent = meta;
+    button.textContent = label;
+    button.type = "button";
+    button.onclick = () => run(button, action);
+    details.append(title, description);
+    element.append(details, button);
+    $("libraryList").append(element);
+  };
+  for (const item of recent)
+    row(
+      item.folderName || folderName(item.folderPath),
+      `On this PC · ${item.folderPath}`,
+      "Select",
+      async () => {
+        render(await api("/api/settings", { folderPath: item.folderPath }));
+        document
+          .querySelector(".current")
+          .scrollIntoView({ behavior: "smooth" });
+      },
+      item.folderPath?.toLowerCase() === state.folderPath?.toLowerCase(),
+    );
+  for (const catalog of catalogs)
+    row(
+      catalog.displayName || "Saved slideshow",
+      `Saved in this browser · ${catalog.imageCount} photos · ${date(catalog.syncedAt)}${catalog.protectionMode === "pin" ? " · PIN protected" : ""}`,
+      "Play saved",
+      () =>
+        openPlayer(`/show?offlineCatalog=${encodeURIComponent(catalog.id)}`),
+    );
+  if (!recent.length && !catalogs.length) {
+    const empty = document.createElement("p");
+    empty.className = "library-empty";
+    empty.textContent =
+      "Choose photos above. Your folders and saved copies will appear here.";
+    $("libraryList").append(empty);
+  }
+}
+async function refresh() {
+  if (refreshing || busy || document.hidden) return;
+  refreshing = true;
+  try {
+    render(await api("/api/state"));
+  } catch {
+    $("statusPill").textContent = "Disconnected";
+    $("connectionError").hidden = false;
+  } finally {
+    refreshing = false;
+  }
+}
+async function run(button, action) {
+  if (busy) return;
+  busy = true;
+  button.disabled = true;
+  try {
+    await action();
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    busy = false;
+    button.disabled = false;
+    pending();
+  }
+}
+function library() {
+  $("library").scrollIntoView({ behavior: "smooth" });
+  $("library").focus({ preventScroll: true });
+}
+function removeOverlay() {
+  slideshowOverlay?.remove();
   slideshowOverlay = null;
+  $("playCurrent").focus();
 }
-
-function createSlideshowOverlay() {
-  removeSlideshowOverlay();
-
+async function openPlayer(url = "/show") {
   const overlay = document.createElement("div");
   overlay.className = "slideshow-overlay";
-  overlay.setAttribute("aria-label", "Slideshow");
   document.body.append(overlay);
   slideshowOverlay = overlay;
-  return overlay;
-}
-
-function mountSlideshowFrame(url = fields.openShow.href || "/show") {
-  if (!slideshowOverlay || slideshowOverlay.querySelector("iframe")) {
-    return;
-  }
-
-  const source = new URL(url, window.location.href);
-  source.searchParams.set("embed", "1");
-
-  const frame = document.createElement("iframe");
-  frame.title = "Slide Show";
-  frame.src = source.href;
-  frame.allow = "fullscreen";
-  slideshowOverlay.append(frame);
-}
-
-async function openSlideshowFullscreen(url) {
-  const overlay = createSlideshowOverlay();
-
-  if (!overlay.requestFullscreen) {
-    removeSlideshowOverlay();
-    return false;
-  }
-
   try {
     await overlay.requestFullscreen({ navigationUI: "hide" });
-    mountSlideshowFrame(url);
-    return true;
+    const frame = document.createElement("iframe"),
+      source = new URL(url, location.href);
+    source.searchParams.set("embed", "1");
+    frame.title = "Slide Show";
+    frame.src = source.href;
+    frame.allow = "fullscreen";
+    overlay.append(frame);
+    frame.focus();
   } catch {
-    removeSlideshowOverlay();
-    return false;
+    removeOverlay();
+    location.href = url;
   }
 }
-
-async function openNativeSlideshowWindow() {
-  const response = await fetch("/api/open-slideshow-window", { method: "POST" });
-  if (!response.ok) {
-    throw new Error("Could not open full-screen slideshow.");
-  }
-}
-
-async function openCurrentSlideshow() {
-  if (!currentState?.folderPath) {
-    showToast("Choose a slideshow first");
-    return;
-  }
-
-  if (await openSlideshowFullscreen(fields.openShow.href || "/show")) {
-    return;
-  }
-
-  try {
-    await openNativeSlideshowWindow();
-  } catch {
-    window.location.href = fields.openShow.href || "/show";
-  }
-}
-
-async function openStageLibrary() {
-  if (await openSlideshowFullscreen("/show")) {
-    return;
-  }
-
-  window.location.href = "/show";
-}
-
-async function openOfflineSlideshow(catalogId) {
-  if (!catalogId) {
-    return;
-  }
-
-  const url = `/show?offlineCatalog=${encodeURIComponent(catalogId)}`;
-  if (await openSlideshowFullscreen(url)) {
-    return;
-  }
-
-  window.location.href = url;
-}
-
-function setRecentControlsDisabled(disabled) {
-  fields.libraryList.querySelectorAll("button").forEach(button => {
-    button.disabled = disabled;
+$("playCurrent").onclick = () => {
+  if (currentState?.imageCount) openPlayer();
+};
+$("openLibrary").onclick = library;
+$("chooseFolder").onclick = () =>
+  run($("chooseFolder"), async () =>
+    render(await api("/api/choose-folder", {})),
+  );
+$("rescan").onclick = () =>
+  run($("rescan"), async () => {
+    render(await api("/api/rescan", {}));
+    showToast("Photos checked");
   });
-}
-
-async function selectRecentSlideshow(folderPath, playAfter) {
-  const selectedPath = normalizeFolderPath(folderPath);
-  if (!selectedPath) {
-    return;
-  }
-
-  if (selectedPath.toLowerCase() === normalizeFolderPath(currentState?.folderPath).toLowerCase()) {
-    if (playAfter) {
-      if (currentState.imageCount === 0) {
-        const state = await api("/api/rescan", { method: "POST" });
-        render(state);
-        if (state.imageCount === 0) {
-          showToast(state.scanMessage || "Slideshow unavailable");
-          return;
-        }
-      }
-      await openCurrentSlideshow();
-    }
-    return;
-  }
-
-  setRecentControlsDisabled(true);
-  try {
-    const state = await api("/api/settings", {
-      method: "POST",
-      body: JSON.stringify({ folderPath: selectedPath })
-    });
-    render(state);
-    showToast("Slideshow selected");
-    if (playAfter) {
-      await openCurrentSlideshow();
-    }
-  } catch (error) {
-    showToast(error.message);
-  } finally {
-    setRecentControlsDisabled(false);
-  }
-}
-
-document.addEventListener("fullscreenchange", () => {
-  if (!document.fullscreenElement) {
-    removeSlideshowOverlay();
-  }
-});
-
-fields.openShow.addEventListener("click", async event => {
+$("settingsForm").onsubmit = (event) => {
   event.preventDefault();
-  await openCurrentSlideshow();
-});
-
-fields.openLibrary.addEventListener("click", openStageLibrary);
-
-fields.playCurrent.addEventListener("click", openCurrentSlideshow);
-
-fields.chooseFolder.addEventListener("click", async () => {
-  fields.chooseFolder.disabled = true;
-  setChooseFolderLabel("Choosing...");
-  try {
-    const result = await api("/api/choose-folder", { method: "POST" });
-    const state = result.state || result;
-    const selected = result.selected ?? normalizeFolderPath(state.folderPath) !== normalizeFolderPath(currentState?.folderPath);
-    render(state);
-    showToast(selected ? "Slideshow selected" : "No folder selected");
-  } catch (error) {
-    showToast(error.message);
-  } finally {
-    setChooseFolderLabel("Switch folder");
-    fields.chooseFolder.disabled = false;
-  }
-});
-
-fields.saveSettings.addEventListener("click", async () => {
-  if (!hasUnsavedChanges) {
-    return;
-  }
-
-  fields.saveSettings.disabled = true;
-  try {
-    render(await api("/api/settings", {
-      method: "POST",
-      body: JSON.stringify(getSettingsPayload())
-    }));
+  run($("saveSettings"), async () => {
+    const submitted = values();
+    const result = await api("/api/settings", submitted);
+    render(result, JSON.stringify(submitted) === JSON.stringify(values()));
     showToast("Changes saved");
-  } catch (error) {
-    showToast(error.message);
-    markUnsavedChanges();
-  } finally {
-    fields.saveSettings.disabled = !hasUnsavedChanges;
-  }
-});
-
-fields.rescan.addEventListener("click", async () => {
-  fields.rescan.disabled = true;
-  try {
-    render(await api("/api/rescan", { method: "POST" }));
-    showToast("Images rescanned");
-  } catch (error) {
-    showToast(error.message);
-  } finally {
-    fields.rescan.disabled = false;
-  }
-});
-
-fields.startAtLogin.addEventListener("change", async () => {
-  if (!currentState) {
-    return;
-  }
-
-  try {
-    render(await api("/api/settings", {
-      method: "POST",
-      body: JSON.stringify({ startAtLogin: fields.startAtLogin.checked })
-    }));
-  } catch (error) {
-    fields.startAtLogin.checked = currentState.startAtLogin;
-    showToast(error.message);
-  }
-});
-
-[
-  fields.slideSeconds,
-  fields.syncWorkers,
-  fields.backgroundColor,
-  ...fields.imageMode,
-  fields.includeSubfolders
-].forEach(field => {
-  field.addEventListener("input", markUnsavedChanges);
-  field.addEventListener("change", markUnsavedChanges);
-});
-
-document.querySelectorAll(".step-button").forEach(button => {
-  button.addEventListener("click", () => {
-    const target = fields[button.dataset.stepTarget];
-    if (!target) {
-      return;
-    }
-
-    const step = Number(button.dataset.step || 1);
-    const min = Number(target.min || Number.NEGATIVE_INFINITY);
-    const max = Number(target.max || Number.POSITIVE_INFINITY);
-    const next = Math.min(max, Math.max(min, Number(target.value || 0) + step));
-    target.value = next;
-    target.dispatchEvent(new Event("input", { bubbles: true }));
   });
+};
+$("discardSettings").onclick = () => {
+  applyValues(baseline);
+  pending();
+};
+for (const name of settingNames) $(name).addEventListener("input", pending);
+$("retry").onclick = refresh;
+$("watchDevice").onclick = () => $("deviceDialog").showModal();
+$("networkAddress").onchange = () =>
+  ($("deviceAddress").value = $("networkAddress").value);
+$("copyAddress").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($("deviceAddress").value);
+    $("deviceStatus").textContent = "Link copied";
+  } catch {
+    $("deviceAddress").select();
+    $("deviceStatus").textContent = "Select and copy this address.";
+  }
+};
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement) removeOverlay();
 });
-
-setSavePending(false);
-refresh().catch(() => {
-  fields.statusPill.textContent = "Starting";
+window.addEventListener("message", async (event) => {
+  if (
+    event.origin === location.origin &&
+    event.source === slideshowOverlay?.querySelector("iframe")?.contentWindow &&
+    event.data === "slide-show-library"
+  ) {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    removeOverlay();
+    library();
+    librarySignature = null;
+    refresh();
+  }
 });
+window.addEventListener("beforeunload", (event) => {
+  if (dirty()) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
+document.addEventListener("visibilitychange", refresh);
+window.addEventListener("focus", refresh);
+setInterval(refresh, 5000);
+refresh();

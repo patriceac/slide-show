@@ -5,6 +5,7 @@ artifacts/
 
 # Local tooling
 .playwright-mcp/
+work/
 .vs/
 .vscode/
 

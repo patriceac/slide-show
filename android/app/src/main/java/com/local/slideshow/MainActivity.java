@@ -66,7 +66,7 @@ public class MainActivity extends Activity {
     private static final int DISCOVERY_PORT = 51778;
     private static final String DISCOVERY_PROBE = "SLIDE_SHOW_DISCOVER_V1";
     private static final String LOG_TAG = "SlideShowAndroid";
-    private static final long SERVER_FOLDER_WATCH_MS = 1000;
+    private static final long SERVER_FOLDER_WATCH_MS = 5000;
     private static final int INK = Color.rgb(23, 32, 29);
     private static final int MUTED = Color.rgb(99, 113, 108);
     private static final int ACCENT = Color.rgb(23, 108, 95);
@@ -100,6 +100,19 @@ public class MainActivity extends Activity {
     private Button settingsButton;
     private Button fitButton;
     private Button fullButton;
+    private ScrollView settingsScroll;
+    private LinearLayout playbackControls;
+    private Button libraryButton;
+    private Button pauseButton;
+    private TextView connectionNotice;
+    private String playbackOrder = "shuffle";
+    private int connectionGeneration;
+    private final String viewerId = java.util.UUID.randomUUID().toString();
+    private final PlaybackSequence.Photo<SlideImage> photoReader = new PlaybackSequence.Photo<SlideImage>() {
+        public String key(SlideImage photo) { return photo.encryptedFileName; }
+        public String name(SlideImage photo) { return photo.name; }
+        public long date(SlideImage photo) { return photo.modifiedAt; }
+    };
 
     private ServerInfo connectedServer;
     private String folderName = "Slide Show";
@@ -108,6 +121,7 @@ public class MainActivity extends Activity {
     private int currentIndex = 0;
     private boolean playing = true;
     private boolean showingSlideshow = false;
+    private boolean activityVisible;
     private volatile int imageLoadToken = 0;
     private Bitmap currentBitmap;
     private OfflineImageStore.OfflineCatalog activeCatalog;
@@ -146,7 +160,7 @@ public class MainActivity extends Activity {
     private final Runnable hideChromeRunnable = new Runnable() {
         @Override
         public void run() {
-            if (settingsPanel == null || settingsPanel.getVisibility() != View.VISIBLE) {
+            if (playing && (settingsPanel == null || settingsPanel.getVisibility() != View.VISIBLE)) {
                 setChromeVisible(false);
             }
         }
@@ -259,6 +273,9 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onStop() {
+        activityVisible = false;
+        savePlayback();
+        handler.removeCallbacks(advanceRunnable);
         if (activeCatalog != null && activeCatalog.hasPin()) {
             unlockedCatalogSlots.remove(activeCatalog.slotId);
             protectedSlideshowPaused = showingSlideshow;
@@ -272,6 +289,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        activityVisible = true;
+        if (showingSlideshow && !protectedSlideshowPaused) scheduleNext();
         if (protectedSlideshowPaused && activeCatalog != null && activeCatalog.hasPin() && !isCatalogUnlocked(activeCatalog)) {
             showPinUnlockDialog(activeCatalog, () -> {
                 protectedSlideshowPaused = false;
@@ -359,12 +378,13 @@ public class MainActivity extends Activity {
 
         root.addView(scroll);
         setContentView(root);
+        renderOfflineOptions(offlineStore.loadCatalogs());
     }
 
     private void discoverServers() {
         discovered.clear();
         if (discoveryList != null) {
-            discoveryList.removeAllViews();
+            renderOfflineOptions(offlineStore.loadCatalogs());
         }
         if (discoveryTitle != null) {
             discoveryTitle.setText("Looking for Slide Show on this Wi-Fi");
@@ -409,8 +429,7 @@ public class MainActivity extends Activity {
                         String host = response.getAddress().getHostAddress();
                         int port = object.optInt("Port", 5177);
                         ServerInfo info = new ServerInfo(object.optString("Name", "Slide Show"), host, port);
-                        discovered.put(info.key(), info);
-                        handler.post(this::renderDiscoveredServers);
+                        handler.post(() -> { discovered.put(info.key(), info); renderDiscoveredServers(); });
                     } catch (Exception ignored) {
                     }
                 }
@@ -431,11 +450,8 @@ public class MainActivity extends Activity {
 
             handler.post(() -> {
                 hideSyncProgress();
-                if (discovered.size() == 1) {
-                    connectTo(discovered.values().iterator().next());
-                } else {
-                    renderDiscoveredServers();
-                }
+                if (showingSlideshow) return;
+                renderDiscoveredServers();
 
                 if (discovered.isEmpty()) {
                     List<OfflineImageStore.OfflineCatalog> cached = offlineStore.loadCatalogs();
@@ -571,7 +587,7 @@ public class MainActivity extends Activity {
     }
 
     private void renderDiscoveredServers() {
-        if (discoveryList == null) {
+        if (showingSlideshow || discoveryList == null) {
             return;
         }
 
@@ -590,11 +606,14 @@ public class MainActivity extends Activity {
             TextView address = text(info.host + ":" + info.port, 14, MUTED, false);
             address.setPadding(0, dp(4), 0, dp(12));
             row.addView(address);
-            Button connect = button("Connect to this PC", true);
+            Button connect = button("Play from this PC", true);
             connect.setOnClickListener(v -> connectTo(info));
             row.addView(connect, fullButtonParams());
             discoveryList.addView(row, cardParams());
         }
+        List<OfflineImageStore.OfflineCatalog> saved = offlineStore.loadCatalogs();
+        if (!saved.isEmpty()) discoveryList.addView(text("Saved on this device", 20, INK, true));
+        for (OfflineImageStore.OfflineCatalog catalog : saved) discoveryList.addView(offlineCatalogCard(catalog, true), cardParams());
     }
 
     private void showOfflineCatalogs(List<OfflineImageStore.OfflineCatalog> catalogs) {
@@ -683,8 +702,9 @@ public class MainActivity extends Activity {
 
                 try {
                     URL url = new URL(value);
-                    int port = url.getPort() > 0 ? url.getPort() : 5177;
-                    connectTo(new ServerInfo("Slide Show", url.getHost(), port));
+                    int port = url.getPort() > 0 ? url.getPort() : ("https".equals(url.getProtocol()) ? 443 : 5177);
+                    if (url.getHost().isEmpty()) throw new IllegalArgumentException("Missing host");
+                    connectTo(new ServerInfo("Slide Show", url.getHost(), port, url.getProtocol()));
                 } catch (Exception ignored) {
                     showDiscoveryScreen("Couldn't connect to Slide Show", "Check the address and try again.");
                 }
@@ -693,39 +713,55 @@ public class MainActivity extends Activity {
     }
 
     private void connectTo(ServerInfo info) {
+        final int generation = ++connectionGeneration;
         connectedServer = info;
-        showDiscoveryScreen("Connecting to " + info.name, "Opening the slideshow from this PC.");
-        hideSyncProgress();
-
+        showDiscoveryScreen("Connecting to " + info.name, "Opening photos from this PC. You can save an offline copy from playback settings.");
         executor.execute(() -> {
             try {
                 OfflineSource source = getOfflineSource(info);
-                JSONObject state = source.state;
-                JSONArray imageList = source.imageList;
-                if (imageList.length() == 0) {
-                    OfflineImageStore.OfflineCatalog cached = cachedFallbackFor(info, state);
-                    if (cached != null) {
-                        handler.post(() -> openOfflineCatalog(cached, () -> showOfflineCatalogs(offlineStore.loadCatalogs())));
-                    } else {
-                        handler.post(() -> showServerEmptyState(state));
-                    }
-                    return;
-                }
-                int syncWorkers = Math.max(2, Math.min(4, state.optInt("syncWorkers", 4)));
-                int slotId = offlineStore.chooseSlotForSync(info.key(), state);
-                if (slotId == 0) {
-                    handler.post(() -> showReplacementPicker(info, state, imageList, syncWorkers, false));
-                } else {
-                    syncToSlot(info, state, imageList, syncWorkers, slotId, false);
-                }
-            } catch (Exception ignored) {
-                OfflineImageStore.OfflineCatalog cached = offlineStore.loadLastPlayableCatalog();
-                if (cached != null) {
-                    handler.post(() -> openOfflineCatalog(cached, () -> showOfflineCatalogs(offlineStore.loadCatalogs())));
-                    return;
-                }
-                handler.post(() -> showDiscoveryScreen("Couldn't connect to Slide Show", "Check that the Windows app is running and allowed through the firewall."));
+                OfflineImageStore.OfflineCatalog live = liveCatalog(info, source);
+                handler.post(() -> {
+                    if (generation != connectionGeneration || showingSlideshow) return;
+                    if (source.imageList.length() == 0) showServerEmptyState(source.state);
+                    else showSlideshow(info, live, false, this::showServerLaunchScreen);
+                });
+            } catch (Exception error) {
+                handler.post(() -> { if (generation == connectionGeneration && !showingSlideshow) showDiscoveryScreen("Could not connect to " + info.name, "Check the address, Wi-Fi and Windows Firewall, then retry. Saved photos remain available below."); });
             }
+        });
+    }
+
+    private OfflineImageStore.OfflineCatalog liveCatalog(ServerInfo info, OfflineSource source) throws Exception {
+        JSONObject state = source.state;
+        String name = state.optString("folderName", "Slide Show");
+        return new OfflineImageStore.OfflineCatalog(0, info.key(), info.name, OfflineImageStore.folderIdentityFor(info.key(), state), name, name,
+            state.optString("backgroundColor", "#05070a"), state.optString("imageMode", "fit"), state.optInt("slideSeconds",7),
+            state.optLong("version",0), 0, 0, "", "", "", offlineStore.imagesForSource(info.key(), source.imageList)).withOrder(state.optString("playbackOrder","shuffle"));
+    }
+
+    private void saveOfflineFromCurrent() {
+        if (syncInProgress || activeCatalog == null) return;
+        ServerInfo info = activeOffline ? serverInfoForCatalog(activeCatalog) : connectedServer;
+        if (info == null) { showTapFeedback("Connect to the source PC first", Gravity.CENTER); return; }
+        final OfflineImageStore.OfflineCatalog selected = activeCatalog;
+        executor.execute(() -> {
+            try {
+                OfflineSource source = getOfflineSource(info);
+                handler.post(() -> {
+                    if (activeCatalog != selected) return;
+                    if (!OfflineImageStore.folderIdentityFor(info.key(), source.state).equals(selected.folderIdentity)) {
+                        new AlertDialog.Builder(this).setTitle("Different folder on the PC").setMessage("Select " + selected.folderName + " on the PC before saving this copy.").setPositiveButton("OK",null).show(); return;
+                    }
+                    int slot = offlineStore.chooseSlotForSync(info.key(), source.state);
+                    int workers = source.state.optInt("syncWorkers",4);
+                    if (slot == 0) showReplacementPicker(info,source.state,source.imageList,workers,true);
+                    else {
+                        OfflineImageStore.OfflineCatalog existing = offlineStore.loadCatalog(slot);
+                        if (existing != null) ensureCatalogUnlocked(existing, () -> syncToSlot(info,source.state,source.imageList,workers,slot,true));
+                        else syncToSlot(info,source.state,source.imageList,workers,slot,true);
+                    }
+                });
+            } catch (Exception error) { handler.post(() -> new AlertDialog.Builder(this).setTitle("PC unavailable").setMessage("Reconnect to " + info.name + " and try again. Your saved photos are unchanged.").setPositiveButton("OK",null).show()); }
         });
     }
 
@@ -734,68 +770,38 @@ public class MainActivity extends Activity {
     }
 
     private void syncToSlot(ServerInfo info, JSONObject state, JSONArray imageList, int syncWorkers, int slotId, boolean keepCurrentOnFailure) {
-        if (syncInProgress) {
-            return;
-        }
+        if (syncInProgress) return;
+        if (imageList.length() == 0) { showTapFeedback("No photos to save", Gravity.CENTER); return; }
         syncInProgress = true;
+        java.util.concurrent.atomic.AtomicBoolean canceled = new java.util.concurrent.atomic.AtomicBoolean();
+        long startedAt = SystemClock.elapsedRealtime();
+        long totalBytes = 0;
+        for (int i=0; i<imageList.length(); i++) totalBytes += imageList.optJSONObject(i).optLong("sizeBytes",0);
+        final String expectedSize = totalBytes > 0 ? " · about " + sizeText(totalBytes) : "";
+        AlertDialog progress = new AlertDialog.Builder(this).setTitle("Saving offline")
+            .setMessage("0 / " + imageList.length() + " photos" + expectedSize).setCancelable(false)
+            .setNegativeButton("Cancel download", null).create();
+        progress.setOnShowListener(dialog -> progress.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v -> {
+            canceled.set(true); progress.setMessage("Canceling download… Your previous copy will be kept."); progress.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(false);
+        }));
+        progress.show();
+        final OfflineImageStore.OfflineCatalog selected = activeCatalog;
         executor.execute(() -> {
             try {
-                if (imageList.length() == 0) {
-                    handler.post(() -> {
-                        if (keepCurrentOnFailure && showingSlideshow) {
-                            restoreActiveHeader();
-                            showTapFeedback("Using saved copy", Gravity.CENTER);
-                        } else {
-                            OfflineImageStore.OfflineCatalog cached = cachedFallbackFor(info, state);
-                            if (cached != null) {
-                                openOfflineCatalog(cached, () -> showOfflineCatalogs(offlineStore.loadCatalogs()));
-                            } else {
-                                showServerEmptyState(state);
-                            }
-                        }
-                    });
-                    return;
-                }
-
-                long syncUiStartedAt = SystemClock.elapsedRealtime();
+                OfflineImageStore.OfflineCatalog saved = offlineStore.sync(slotId, info.key(), info.name, info.baseUrl(), state, imageList, syncWorkers,
+                    (completed,total,name) -> handler.post(() -> { if (!canceled.get()) progress.setMessage(completed + " / " + total + " photos" + expectedSize + etaText(completed,total,startedAt)); }), canceled);
                 handler.post(() -> {
-                    showSyncStatus(state, 0, imageList.length(), syncUiStartedAt);
-                });
-                OfflineImageStore.OfflineCatalog catalog = offlineStore.sync(
-                    slotId,
-                    info.key(),
-                    info.name,
-                    info.baseUrl(),
-                    state,
-                    imageList,
-                    syncWorkers,
-                    (completed, total, name) -> handler.post(() -> {
-                        showSyncStatus(state, completed, total, syncUiStartedAt);
-                    }));
-                handler.post(() -> openSyncedCatalog(info, catalog));
-            } catch (Exception ignored) {
-                if (keepCurrentOnFailure) {
-                    handler.post(() -> {
-                        restoreActiveHeader();
-                        showTapFeedback("Sync failed", Gravity.CENTER);
-                    });
-                    return;
-                }
-                OfflineImageStore.OfflineCatalog cached = offlineStore.loadLastPlayableCatalog();
-                if (cached != null) {
-                    handler.post(() -> openOfflineCatalog(cached, () -> showOfflineCatalogs(offlineStore.loadCatalogs())));
-                    return;
-                }
-                handler.post(() -> showDiscoveryScreen("Couldn't connect to Slide Show", "Check that the Windows app is running and allowed through the firewall."));
-            } finally {
-                syncInProgress = false;
-                handler.post(() -> {
-                    if (pendingServerFolderCheck) {
-                        pendingServerFolderCheck = false;
-                        checkServerFolderForChanges();
+                    progress.dismiss();
+                    if (showingSlideshow && activeCatalog == selected) {
+                        if (activeOffline) openOfflineCatalog(saved);
+                        else { restoreActiveHeader(); showTapFeedback("Saved on this device", Gravity.CENTER); buildSettingsPanel(); }
                     }
                 });
-            }
+            } catch (Exception error) {
+                handler.post(() -> { progress.dismiss(); new AlertDialog.Builder(this).setTitle(canceled.get()?"Download canceled":"Could not save photos")
+                    .setMessage(canceled.get()?"Your previous saved copy is unchanged.":cleanString(error.getMessage(),"Check storage and the connection, then retry. Your previous saved copy is unchanged."))
+                    .setPositiveButton("OK",null).show(); });
+            } finally { syncInProgress=false; }
         });
     }
 
@@ -821,7 +827,7 @@ public class MainActivity extends Activity {
 
     private OfflineImageStore.OfflineCatalog cachedFallbackFor(ServerInfo info, JSONObject state) {
         OfflineImageStore.OfflineCatalog matching = offlineStore.loadPlayableCatalogFor(info.key(), state);
-        return matching != null ? matching : offlineStore.loadLastPlayableCatalog();
+        return matching;
     }
 
     private OfflineSource getOfflineSource(ServerInfo info) throws Exception {
@@ -841,22 +847,11 @@ public class MainActivity extends Activity {
     }
 
     private ServerInfo serverInfoForCatalog(OfflineImageStore.OfflineCatalog catalog) {
-        if (catalog == null || catalog.serverKey == null || catalog.serverKey.trim().isEmpty()) {
-            return null;
-        }
-
-        int separator = catalog.serverKey.lastIndexOf(':');
-        if (separator <= 0 || separator >= catalog.serverKey.length() - 1) {
-            return null;
-        }
-
+        if (catalog == null || catalog.serverKey == null || catalog.serverKey.isEmpty()) return null;
         try {
-            String host = catalog.serverKey.substring(0, separator);
-            int port = Integer.parseInt(catalog.serverKey.substring(separator + 1));
-            return new ServerInfo(catalog.serverName, host, port);
-        } catch (NumberFormatException ignored) {
-            return null;
-        }
+            URL url = new URL(catalog.serverKey.contains("://") ? catalog.serverKey : "http://" + catalog.serverKey);
+            return new ServerInfo(catalog.serverName,url.getHost(),url.getPort()>0?url.getPort():url.getDefaultPort(),url.getProtocol());
+        } catch (Exception error) { return null; }
     }
 
     private void showServerEmptyState(JSONObject state) {
@@ -946,56 +941,8 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            refreshOfflineCatalogBeforeOpen(current, beforeOpen);
+            openUnlockedOfflineCatalog(current, beforeOpen);
         }, onCanceled);
-    }
-
-    private void refreshOfflineCatalogBeforeOpen(OfflineImageStore.OfflineCatalog catalog, Runnable beforeOpen) {
-        ServerInfo info = serverInfoForCatalog(catalog);
-        if (info == null || syncInProgress) {
-            openUnlockedOfflineCatalog(catalog, beforeOpen);
-            return;
-        }
-
-        syncInProgress = true;
-        executor.execute(() -> {
-            OfflineImageStore.OfflineCatalog current = catalog;
-            try {
-                OfflineSource source = getOfflineSource(info);
-                if (source.imageList.length() > 0 && offlineStore.chooseSlotForSync(info.key(), source.state) == catalog.slotId) {
-                    OfflineImageStore.OfflineCatalog latest = reloadCatalog(catalog);
-                    if (offlineStore.catalogMatchesSource(latest, info.key(), source.imageList) && latest.usesCurrentImageFormat()) {
-                        if (!offlineStore.catalogMatchesMetadata(latest, info.key(), source.state)) {
-                            OfflineImageStore.OfflineCatalog updated = offlineStore.updateCatalogMetadata(latest.slotId, info.key(), info.name, source.state);
-                            if (updated != null) {
-                                current = updated;
-                            }
-                        } else {
-                            current = latest;
-                        }
-                    } else {
-                        int syncWorkers = Math.max(2, Math.min(4, source.state.optInt("syncWorkers", 4)));
-                        long syncUiStartedAt = SystemClock.elapsedRealtime();
-                        handler.post(() -> showSyncStatus(source.state, 0, source.imageList.length(), syncUiStartedAt));
-                        current = offlineStore.sync(
-                            latest.slotId,
-                            info.key(),
-                            info.name,
-                            info.baseUrl(),
-                            source.state,
-                            source.imageList,
-                            syncWorkers,
-                            (completed, total, name) -> handler.post(() -> showSyncStatus(source.state, completed, total, syncUiStartedAt)));
-                    }
-                }
-            } catch (Exception ignored) {
-            } finally {
-                syncInProgress = false;
-            }
-
-            OfflineImageStore.OfflineCatalog catalogToOpen = current;
-            handler.post(() -> openUnlockedOfflineCatalog(catalogToOpen, beforeOpen));
-        });
     }
 
     private void openUnlockedOfflineCatalog(OfflineImageStore.OfflineCatalog catalog, Runnable beforeOpen) {
@@ -1215,12 +1162,13 @@ public class MainActivity extends Activity {
         slideshowBackAction = backAction;
         images.clear();
         images.addAll(catalog.images);
-        Collections.shuffle(images);
+        playbackOrder = catalog.playbackOrder;
 
         folderName = cleanFolderName(catalog.displayName);
         slideSeconds = catalog.slideSeconds;
         imageMode = normalizeImageMode(catalog.imageMode);
         currentIndex = 0;
+        restorePlayback();
         playing = true;
 
         root = new FrameLayout(this);
@@ -1254,6 +1202,9 @@ public class MainActivity extends Activity {
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
 
+        libraryButton = overlayButton("Library");
+        libraryButton.setOnClickListener(v -> returnToSlideshowLauncher());
+        top.addView(libraryButton, new LinearLayout.LayoutParams(-2,-2));
         LinearLayout folderPill = pillRow();
         folderTitle = text(offline ? folderName + " - Offline" : folderName, 16, Color.WHITE, true);
         folderTitle.setSingleLine(true);
@@ -1275,7 +1226,19 @@ public class MainActivity extends Activity {
 
         settingsButton = overlayButton("Settings");
         settingsButton.setOnClickListener(v -> toggleSettingsPanel());
-        root.addView(settingsButton, settingsButtonOverlayParams());
+        playbackControls = new LinearLayout(this);
+        playbackControls.setGravity(Gravity.CENTER);
+        Button previous = overlayButton("Previous"); previous.setOnClickListener(v -> advance(-1));
+        pauseButton = overlayButton("Pause"); pauseButton.setOnClickListener(v -> togglePlay());
+        Button next = overlayButton("Next"); next.setOnClickListener(v -> advance(1));
+        playbackControls.addView(previous,controlParams()); playbackControls.addView(pauseButton,controlParams());
+        playbackControls.addView(next,controlParams()); playbackControls.addView(settingsButton,controlParams());
+        chrome.addView(playbackControls,new LinearLayout.LayoutParams(-1,-2));
+        connectionNotice = text("",14,Color.WHITE,false); connectionNotice.setBackgroundColor(Color.argb(220,70,45,10));
+        connectionNotice.setPadding(dp(14),dp(8),dp(14),dp(8)); connectionNotice.setVisibility(View.GONE);
+        connectionNotice.setOnClickListener(v -> { checkServerFolderForChanges(); renderCurrentSlide(); });
+        FrameLayout.LayoutParams noticeParams = new FrameLayout.LayoutParams(-1,-2,Gravity.TOP); noticeParams.topMargin=dp(90);
+        root.addView(connectionNotice,noticeParams);
 
         settingsPanel = new LinearLayout(this);
         settingsPanel.setOrientation(LinearLayout.VERTICAL);
@@ -1283,7 +1246,10 @@ public class MainActivity extends Activity {
         settingsPanel.setBackgroundColor(Color.argb(235, 9, 13, 16));
         settingsPanel.setClickable(true);
         settingsPanel.setVisibility(View.GONE);
-        root.addView(settingsPanel, settingsPanelParams());
+        settingsScroll = new ScrollView(this);
+        settingsScroll.addView(settingsPanel);
+        settingsScroll.setVisibility(View.GONE);
+        root.addView(settingsScroll, settingsPanelParams());
         buildSettingsPanel();
 
         feedbackText = text("", 44, Color.WHITE, true);
@@ -1308,6 +1274,7 @@ public class MainActivity extends Activity {
     }
 
     private void returnToSlideshowLauncher() {
+        savePlayback(); connectionGeneration++;
         Runnable backAction = slideshowBackAction;
         slideshowBackAction = null;
 
@@ -1336,6 +1303,14 @@ public class MainActivity extends Activity {
         settingsPanel.removeAllViews();
         TextView title = text("Playback", 20, Color.WHITE, true);
         settingsPanel.addView(title);
+        Button closeSettings = overlayButton("Close settings"); closeSettings.setOnClickListener(v -> setSettingsPanelVisible(false)); settingsPanel.addView(closeSettings,fullButtonParams());
+        settingsPanel.addView(text(activeOffline ? "Only this saved copy" : "Applies to viewers connected to this PC",14,Color.LTGRAY,false));
+        Button order = overlayButton("Order: " + ("name".equals(playbackOrder)?"File name":"date".equals(playbackOrder)?"Date modified":"Shuffle"));
+        order.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Photo order").setItems(new String[]{"Shuffle","File name (A–Z)","Date modified (oldest first)"},(dialog,which)-> {
+            savePlayback(); playbackOrder = new String[]{"shuffle","name","date"}[which];
+            arrangeImages(Collections.emptyList()); postPlaybackSettings(); buildSettingsPanel(); renderCurrentSlide();
+        }).show()); settingsPanel.addView(order,fullButtonParams());
+        Button restart = overlayButton("Start from beginning"); restart.setOnClickListener(v -> {currentIndex=0;renderCurrentSlide();}); settingsPanel.addView(restart,fullButtonParams());
 
         timerText = text("", 16, Color.argb(220, 255, 255, 255), false);
         timerText.setPadding(0, dp(14), 0, dp(8));
@@ -1361,11 +1336,11 @@ public class MainActivity extends Activity {
         modeControls.setOrientation(LinearLayout.HORIZONTAL);
         settingsPanel.addView(modeControls);
 
-        fitButton = overlayButton("Fit");
+        fitButton = overlayButton("Entire photo");
         fitButton.setOnClickListener(v -> updateImageMode("fit"));
         modeControls.addView(fitButton, controlParams());
 
-        fullButton = overlayButton("Full");
+        fullButton = overlayButton("Fill (crops)");
         fullButton.setOnClickListener(v -> updateImageMode("full"));
         modeControls.addView(fullButton, controlParams());
 
@@ -1373,18 +1348,20 @@ public class MainActivity extends Activity {
         offlineTitle.setPadding(0, dp(18), 0, dp(8));
         settingsPanel.addView(offlineTitle);
 
-        TextView offlineDetails = text(activeCatalog == null ? "No saved slideshow selected" : cleanFolderName(activeCatalog.displayName) + " - " + savedCatalogSummary(activeCatalog), 14, Color.argb(190, 255, 255, 255), false);
+        TextView offlineDetails = text(activeCatalog == null || activeCatalog.slotId == 0 ? "Playing from the PC. Save a copy to watch without a connection." : cleanFolderName(activeCatalog.displayName) + " - " + savedCatalogSummary(activeCatalog), 14, Color.argb(190, 255, 255, 255), false);
         offlineDetails.setPadding(0, 0, 0, dp(8));
         settingsPanel.addView(offlineDetails);
 
+        Button save = overlayButton(activeOffline ? "Update saved copy" : "Save offline");
+        save.setOnClickListener(v -> saveOfflineFromCurrent()); settingsPanel.addView(save,fullButtonParams());
         List<OfflineImageStore.OfflineCatalog> catalogs = offlineStore.loadCatalogs();
-        if (catalogs.size() > 1) {
+        if (!catalogs.isEmpty()) {
             Button switchOffline = overlayButton("Switch offline slideshow");
             switchOffline.setOnClickListener(v -> showOfflineSwitchDialog());
             settingsPanel.addView(switchOffline, fullButtonParams());
         }
 
-        if (activeCatalog != null) {
+        if (activeCatalog != null && activeCatalog.slotId > 0) {
             TextView protectionTitle = text("Protection", 16, Color.argb(220, 255, 255, 255), false);
             protectionTitle.setPadding(0, dp(18), 0, dp(8));
             settingsPanel.addView(protectionTitle);
@@ -1623,7 +1600,48 @@ public class MainActivity extends Activity {
         }
     }
 
+    private String playbackKey() { return (activeOffline ? "saved:" : "live:") + activeCatalog.folderIdentity; }
+
+    private void savePlayback() {
+        if (activeCatalog == null || images.isEmpty() || currentIndex >= images.size()) return;
+        try {
+            JSONObject data = new JSONObject(); JSONArray keys = new JSONArray();
+            for (SlideImage image : images) keys.put(image.encryptedFileName);
+            data.put("keys",keys); data.put("current",images.get(currentIndex).encryptedFileName); data.put("order",playbackOrder);
+            data.put("seconds",slideSeconds); data.put("mode",imageMode);
+            getSharedPreferences("playback",MODE_PRIVATE).edit().putString(playbackKey(),data.toString()).apply();
+        } catch (Exception ignored) {}
+    }
+
+    private void restorePlayback() {
+        List<String> keys = new ArrayList<>(); String current = "";
+        try {
+            JSONObject data = new JSONObject(getSharedPreferences("playback",MODE_PRIVATE).getString(playbackKey(),"{}"));
+            if (activeOffline) { playbackOrder=data.optString("order",playbackOrder); slideSeconds=data.optInt("seconds",slideSeconds); imageMode=data.optString("mode",imageMode); }
+            JSONArray saved = data.optJSONArray("keys");
+            if (playbackOrder.equals(data.optString("order")) && saved != null) for (int i=0;i<saved.length();i++) keys.add(saved.getString(i));
+            current=data.optString("current","");
+        } catch (Exception ignored) {}
+        images.clear(); images.addAll(PlaybackSequence.arrange(activeCatalog.images,playbackOrder,keys,photoReader)); currentIndex=0;
+        for (int i=0;i<images.size();i++) if (images.get(i).encryptedFileName.equals(current)) {currentIndex=i;break;}
+    }
+
+    private void arrangeImages(List<String> keys) {
+        String current = images.isEmpty()?"":images.get(currentIndex).encryptedFileName;
+        List<SlideImage> arranged=PlaybackSequence.arrange(images,playbackOrder,keys,photoReader);
+        images.clear();images.addAll(arranged);currentIndex=0;
+        for (int i=0;i<images.size();i++) if(images.get(i).encryptedFileName.equals(current)){currentIndex=i;break;}
+    }
+
+    private Bitmap decodePhoto(OfflineImageStore.OfflineCatalog catalog, SlideImage item, int width, int height) throws Exception {
+        if (catalog.slotId > 0) return offlineStore.decodeBitmap(catalog,item,width,height);
+        ServerInfo info=serverInfoForCatalog(catalog);
+        if (info == null) throw new IllegalStateException("PC unavailable");
+        return offlineStore.decodeOnlineBitmap(info.baseUrl()+item.path,width,height);
+    }
+
     private void renderCurrentSlide() {
+        savePlayback();
         handler.removeCallbacks(advanceRunnable);
         int token = ++imageLoadToken;
         if (activeCatalog != null && activeCatalog.hasPin() && !isCatalogUnlocked(activeCatalog)) {
@@ -1669,7 +1687,7 @@ public class MainActivity extends Activity {
                 if (catalog == null) {
                     return;
                 }
-                Bitmap bitmap = cacheBitmap(item, offlineStore.decodeBitmap(catalog, item, targetWidth, targetHeight));
+                Bitmap bitmap = cacheBitmap(item, decodePhoto(catalog, item, targetWidth, targetHeight));
                 handler.post(() -> {
                     if (token == imageLoadToken && index == currentIndex) {
                         showDecodedSlide(index, item, bitmap);
@@ -1681,7 +1699,7 @@ public class MainActivity extends Activity {
                 Log.e(LOG_TAG, "Could not render slide index=" + (index + 1), error);
                 handler.post(() -> {
                     if (token == imageLoadToken) {
-                        showTapFeedback("Image failed", Gravity.CENTER);
+                        connectionNotice.setText("Could not load this photo. Tap to retry, use Next, or open Library."); connectionNotice.setVisibility(View.VISIBLE);
                         scheduleNext();
                     }
                 });
@@ -1695,6 +1713,7 @@ public class MainActivity extends Activity {
         }
 
         currentBitmap = bitmap;
+        connectionNotice.setVisibility(View.GONE);
         slideImage.setImageBitmap(bitmap);
         slideImage.invalidate();
         positionText.setText((index + 1) + " / " + images.size());
@@ -1708,7 +1727,7 @@ public class MainActivity extends Activity {
             return;
         }
 
-        for (int offset = 1; offset <= 3; offset++) {
+        for (int offset = 1; offset <= (activeOffline ? 3 : 1); offset++) {
             preloadSlideAt(index + offset);
             preloadSlideAt(index - offset);
         }
@@ -1735,7 +1754,7 @@ public class MainActivity extends Activity {
             try {
                 OfflineImageStore.OfflineCatalog catalog = activeCatalog;
                 if (catalog != null && cachedBitmap(item) == null) {
-                    cacheBitmap(item, offlineStore.decodeBitmap(catalog, item, targetWidth, targetHeight));
+                    cacheBitmap(item, decodePhoto(catalog, item, targetWidth, targetHeight));
                     handler.post(this::trimBitmapCache);
                 }
             } catch (Exception error) {
@@ -1827,7 +1846,7 @@ public class MainActivity extends Activity {
 
     private void scheduleNext() {
         handler.removeCallbacks(advanceRunnable);
-        if (playing && !images.isEmpty()) {
+        if (activityVisible && playing && !images.isEmpty()) {
             handler.postDelayed(advanceRunnable, Math.max(2, slideSeconds) * 1000L);
         }
     }
@@ -1842,7 +1861,8 @@ public class MainActivity extends Activity {
 
     private void togglePlay() {
         playing = !playing;
-        scheduleNext();
+        if (pauseButton != null) pauseButton.setText(playing ? "Pause" : "Play");
+        showChromeTemporarily(); scheduleNext();
     }
 
     private String playbackStatusText() {
@@ -1861,6 +1881,7 @@ public class MainActivity extends Activity {
             return;
         }
 
+        if (chrome.getVisibility() != View.VISIBLE) { showChromeTemporarily(); return; }
         float third = root.getWidth() / 3f;
         if (x < third) {
             advance(-1);
@@ -1908,6 +1929,7 @@ public class MainActivity extends Activity {
     private void setSettingsPanelVisible(boolean visible) {
         if (settingsPanel != null) {
             settingsPanel.setVisibility(visible ? View.VISIBLE : View.GONE);
+            if (settingsScroll != null) settingsScroll.setVisibility(visible ? View.VISIBLE : View.GONE);
         }
         if (settingsButton != null) {
             boolean chromeVisible = chrome != null && chrome.getVisibility() == View.VISIBLE;
@@ -1927,9 +1949,10 @@ public class MainActivity extends Activity {
     }
 
     private boolean isSlideshowTapArea(MotionEvent event) {
-        if (settingsPanel != null
-            && settingsPanel.getVisibility() == View.VISIBLE
-            && isPointInsideView(settingsPanel, event.getRawX(), event.getRawY())) {
+        if ((chrome != null && chrome.getVisibility() == View.VISIBLE && (isPointInsideView(playbackControls,event.getRawX(),event.getRawY()) || isPointInsideView(libraryButton,event.getRawX(),event.getRawY()))) || isPointInsideView(connectionNotice,event.getRawX(),event.getRawY())) return false;
+        if (settingsScroll != null
+            && settingsScroll.getVisibility() == View.VISIBLE
+            && isPointInsideView(settingsScroll, event.getRawX(), event.getRawY())) {
             return false;
         }
 
@@ -2004,18 +2027,16 @@ public class MainActivity extends Activity {
     }
 
     private void postPlaybackSettings() {
-        if (connectedServer == null) {
-            return;
-        }
-
+        savePlayback();
+        if (activeOffline || connectedServer == null) return;
+        final ServerInfo target = connectedServer;
+        final int seconds = slideSeconds;
+        final String size = imageMode, order = playbackOrder;
         executor.execute(() -> {
             try {
-                JSONObject body = new JSONObject();
-                body.put("slideSeconds", slideSeconds);
-                body.put("imageMode", imageMode);
-                postJson(connectedServer.baseUrl() + "/api/playback-settings", body);
-            } catch (Exception ignored) {
-            }
+                JSONObject body = new JSONObject(); body.put("slideSeconds",seconds); body.put("imageMode",size); body.put("playbackOrder",order);
+                postJson(target.baseUrl() + "/api/playback-settings",body);
+            } catch (Exception error) { handler.post(() -> { if (showingSlideshow && connectionNotice != null) {connectionNotice.setText("Settings could not be saved to the PC. Reconnect and try again.");connectionNotice.setVisibility(View.VISIBLE);} }); }
         });
     }
 
@@ -2056,70 +2077,28 @@ public class MainActivity extends Activity {
     }
 
     private void checkServerFolderForChanges() {
-        if (!showingSlideshow || connectedServer == null) {
-            return;
-        }
-
-        if (checkingServerFolder || replacementPromptShowing) {
-            scheduleServerFolderWatch();
-            return;
-        }
-
-        if (syncInProgress) {
-            pendingServerFolderCheck = true;
-            scheduleServerFolderWatch();
-            return;
-        }
-
+        if (!showingSlideshow || activeOffline || connectedServer == null || checkingServerFolder) return;
         checkingServerFolder = true;
-        ServerInfo info = connectedServer;
-        OfflineImageStore.OfflineCatalog catalog = activeCatalog;
+        final ServerInfo info = connectedServer;
         executor.execute(() -> {
             try {
                 OfflineSource source = getOfflineSource(info);
-                JSONObject state = source.state;
-                JSONArray imageList = source.imageList;
-                String nextIdentity = OfflineImageStore.folderIdentityFor(info.key(), state);
-                if (catalog != null &&
-                    nextIdentity.equals(catalog.folderIdentity) &&
-                    catalog.usesCurrentImageFormat() &&
-                    offlineStore.catalogMatchesSource(catalog, info.key(), imageList)) {
-                    if (!offlineStore.catalogMatchesMetadata(catalog, info.key(), state)) {
-                        OfflineImageStore.OfflineCatalog updated = offlineStore.updateCatalogMetadata(catalog.slotId, info.key(), info.name, state);
-                        if (updated != null) {
-                            handler.post(() -> {
-                                if (activeCatalog != null && activeCatalog.slotId == updated.slotId) {
-                                    activeCatalog = updated;
-                                    restoreActiveHeader();
-                                }
-                            });
-                        }
-                    }
-                    return;
-                }
-
-                int syncWorkers = Math.max(2, Math.min(4, state.optInt("syncWorkers", 4)));
-                int slotId = offlineStore.chooseSlotForSync(info.key(), state);
-                if (slotId == 0 && catalog != null && !activeOffline) {
-                    slotId = catalog.slotId;
-                }
-                int targetSlotId = slotId;
+                OfflineImageStore.OfflineCatalog next = liveCatalog(info,source);
                 handler.post(() -> {
-                    if (!showingSlideshow || connectedServer == null || !connectedServer.key().equals(info.key())) {
-                        return;
-                    }
-
-                    if (targetSlotId == 0) {
-                        showReplacementPicker(info, state, imageList, syncWorkers, true);
-                    } else {
-                        syncToSlot(info, state, imageList, syncWorkers, targetSlotId, true);
-                    }
+                    if (!showingSlideshow || activeOffline || connectedServer != info) return;
+                    connectionNotice.setVisibility(View.GONE);
+                    if (activeCatalog == null || !next.folderIdentity.equals(activeCatalog.folderIdentity)) { showSlideshow(info,next,false,this::showServerLaunchScreen); return; }
+                    boolean contentChanged = next.serverVersion != activeCatalog.serverVersion;
+                    boolean orderChanged = !playbackOrder.equals(next.playbackOrder);
+                    boolean durationChanged = slideSeconds != next.slideSeconds;
+                    savePlayback(); activeCatalog=next; slideSeconds=next.slideSeconds; imageMode=next.imageMode; playbackOrder=next.playbackOrder;
+                    root.setBackgroundColor(parseColor(next.backgroundColor)); applyImageMode(); updateSettingsText(); updateImageModeButtons();
+                    if (contentChanged) { restorePlayback(); renderCurrentSlide(); }
+                    else if (orderChanged) { arrangeImages(Collections.emptyList()); renderCurrentSlide(); }
+                    else if (durationChanged) scheduleNext();
                 });
-            } catch (Exception ignored) {
-            } finally {
-                checkingServerFolder = false;
-                handler.post(this::scheduleServerFolderWatch);
-            }
+            } catch (Exception error) { handler.post(() -> { if (showingSlideshow && connectedServer == info && connectionNotice != null) {connectionNotice.setText("PC disconnected. Tap to retry or open a saved copy in Library.");connectionNotice.setVisibility(View.VISIBLE);} }); }
+            finally { checkingServerFolder=false; handler.post(this::scheduleServerFolderWatch); }
         });
     }
 
@@ -2132,6 +2111,7 @@ public class MainActivity extends Activity {
             try {
                 JSONObject body = new JSONObject();
                 body.put("active", active);
+                body.put("viewerId", viewerId);
                 postJson(connectedServer.baseUrl() + "/api/viewer-heartbeat", body);
             } catch (Exception ignored) {
             }
@@ -2249,13 +2229,13 @@ public class MainActivity extends Activity {
     }
 
     private LinearLayout.LayoutParams fullButtonParams() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(50));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
         params.setMargins(0, dp(8), 0, 0);
         return params;
     }
 
     private LinearLayout.LayoutParams controlParams() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(52), 1);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1);
         params.setMargins(dp(4), 0, dp(4), 0);
         return params;
     }
@@ -2281,9 +2261,14 @@ public class MainActivity extends Activity {
     }
 
     private FrameLayout.LayoutParams settingsPanelParams() {
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -2);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, Math.round(getResources().getDisplayMetrics().heightPixels * .8f));
         params.gravity = Gravity.BOTTOM;
         return params;
+    }
+
+    @Override public void onConfigurationChanged(android.content.res.Configuration config) {
+        super.onConfigurationChanged(config);
+        if (settingsScroll != null) settingsScroll.setLayoutParams(settingsPanelParams());
     }
 
     private int parseColor(String value) {
@@ -2318,19 +2303,22 @@ public class MainActivity extends Activity {
         final String name;
         final String host;
         final int port;
+        final String scheme;
 
-        ServerInfo(String name, String host, int port) {
+        ServerInfo(String name, String host, int port) { this(name,host,port,"http"); }
+        ServerInfo(String name, String host, int port, String scheme) {
+            this.scheme = "https".equals(scheme) ? "https" : "http";
             this.name = name == null || name.isEmpty() ? "Slide Show" : name;
             this.host = host;
             this.port = port;
         }
 
         String key() {
-            return host + ":" + port;
+            return ("https".equals(scheme) ? "https://" : "") + host + ":" + port;
         }
 
         String baseUrl() {
-            return "http://" + host + ":" + port;
+            return scheme + "://" + host + ":" + port;
         }
     }
 
@@ -2348,8 +2336,11 @@ public class MainActivity extends Activity {
         final String name;
         final String path;
         final String encryptedFileName;
+        final long modifiedAt;
 
-        SlideImage(String name, String path, String encryptedFileName) {
+        SlideImage(String name, String path, String encryptedFileName) { this(name,path,encryptedFileName,0); }
+        SlideImage(String name, String path, String encryptedFileName, long modifiedAt) {
+            this.modifiedAt = modifiedAt;
             this.name = name;
             this.path = path;
             this.encryptedFileName = encryptedFileName;

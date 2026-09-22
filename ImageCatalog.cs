@@ -3,7 +3,7 @@ using System.Text;
 
 namespace SlideShow;
 
-public sealed record ImageItem(int Id, string Path, string Name);
+public sealed record ImageItem(int Id, string Path, string Name, long SizeBytes = 0, DateTimeOffset ModifiedAt = default);
 
 public sealed class ImageCatalog
 {
@@ -72,42 +72,50 @@ public sealed class ImageCatalog
 
     public void Scan(AppSettings settings)
     {
-        var next = new List<ImageItem>();
-        var message = settings.FolderPath is null ? "Choose a slideshow folder." : null;
-
-        try
-        {
-            if (!string.IsNullOrWhiteSpace(settings.FolderPath) && Directory.Exists(settings.FolderPath))
-            {
-                var option = settings.IncludeSubfolders ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-                foreach (var file in Directory.EnumerateFiles(settings.FolderPath, "*", option))
-                {
-                    if (SupportedExtensions.Contains(System.IO.Path.GetExtension(file)))
-                    {
-                        next.Add(new ImageItem(next.Count, file, System.IO.Path.GetFileName(file)));
-                    }
-                }
-            }
-            else if (!string.IsNullOrWhiteSpace(settings.FolderPath))
-            {
-                message = "The selected folder could not be found.";
-            }
-        }
-        catch (UnauthorizedAccessException)
-        {
-            message = "Some files could not be reached from this folder.";
-        }
-        catch (IOException)
-        {
-            message = "This folder could not be scanned right now.";
-        }
-
         lock (_gate)
         {
-            _images = next;
-            _version++;
+            var next = new List<ImageItem>();
+            var message = settings.FolderPath is null ? "Choose a slideshow folder." : null;
+            var unsupported = 0;
+
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(settings.FolderPath) && Directory.Exists(settings.FolderPath))
+                {
+                    var options = new EnumerationOptions { RecurseSubdirectories = settings.IncludeSubfolders, IgnoreInaccessible = true, AttributesToSkip = 0 };
+                    foreach (var file in Directory.EnumerateFiles(settings.FolderPath, "*", options).Order(StringComparer.OrdinalIgnoreCase))
+                    {
+                        if (SupportedExtensions.Contains(System.IO.Path.GetExtension(file)))
+                        {
+                            var info = new FileInfo(file);
+                            next.Add(new ImageItem(next.Count, file, info.Name, info.Length, info.LastWriteTimeUtc));
+                        }
+                        else { unsupported++; }
+                    }
+                }
+                else if (!string.IsNullOrWhiteSpace(settings.FolderPath))
+                {
+                    message = "Folder unavailable. Reconnect its drive or choose another folder.";
+                }
+            }
+            catch (UnauthorizedAccessException)
+            {
+                message = "Some files could not be reached from this folder.";
+            }
+            catch (IOException)
+            {
+                message = "This folder could not be scanned right now.";
+            }
+
+            if (!_images.SequenceEqual(next))
+            {
+                _images = next;
+                _version++;
+            }
             LastScannedAt = DateTimeOffset.Now;
-            ScanMessage = message;
+            ScanMessage = message ?? (next.Count == 0 && settings.FolderPath is not null
+                ? "No supported photos. Choose a folder with JPG, PNG, WebP, GIF, BMP, AVIF or SVG files. HEIC/HEIF must be converted first."
+                : unsupported > 0 ? $"{unsupported} unsupported files skipped. Supported: JPG, PNG, WebP, GIF, BMP, AVIF and SVG." : null);
         }
     }
 
@@ -129,11 +137,10 @@ public sealed class ImageCatalog
 
     public static string GetCacheKey(ImageItem image)
     {
-        var info = new FileInfo(image.Path);
         var material = string.Join('\n',
             System.IO.Path.GetFullPath(image.Path).ToUpperInvariant(),
-            info.Exists ? info.Length : 0,
-            info.Exists ? info.LastWriteTimeUtc.Ticks : 0);
+            image.SizeBytes,
+            image.ModifiedAt.UtcTicks);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material))).ToLowerInvariant();
     }
 

@@ -103,23 +103,38 @@ public sealed class AppState
             httpsLanUrls.Select(url => $"{url}/show").ToArray(),
             $"{displayUrl}/certificate.cer",
             $"{httpsDisplayUrl}/certificate.cer",
-            settings.RecentSlideshows.Select(ToDto).ToArray());
+            settings.RecentSlideshows.Select(ToDto).ToArray(),
+            settings.PlaybackOrder,
+            Environment.MachineName,
+            _viewerActivity.RemoteViewerCount);
     }
 
     public IReadOnlyList<ImageDto> GetImages(bool shuffle)
     {
         return _catalog.GetImages(shuffle)
-            .Select(image => new ImageDto(image.Id, image.Name, $"/image/{image.Id}?v={_catalog.Version}", ImageCatalog.GetCacheKey(image)))
+            .Select(image => new ImageDto(image.Id, image.Name, $"/image/{image.Id}?v={_catalog.Version}", ImageCatalog.GetCacheKey(image), image.SizeBytes, image.ModifiedAt.ToUnixTimeMilliseconds()))
             .ToArray();
     }
 
     public ImageItem? GetImage(int id) => _catalog.GetById(id);
 
-    public void RecordRemoteViewer(string viewerKey) => _viewerActivity.Record(viewerKey);
+    public void RecordViewer(string viewerKey, bool isLocal) => _viewerActivity.Record(viewerKey, isLocal);
 
     public void ClearRemoteViewer(string viewerKey) => _viewerActivity.Clear(viewerKey);
 
-    public void Rescan() => _catalog.Scan(GetSettings());
+    public void Rescan()
+    {
+        lock (_gate) { _catalog.Scan(_settings.Copy()); }
+    }
+
+    public void RefreshCatalog()
+    {
+        lock (_gate)
+        {
+            if (_catalog.LastScannedAt is null || DateTimeOffset.Now - _catalog.LastScannedAt >= TimeSpan.FromSeconds(5))
+                _catalog.Scan(_settings.Copy());
+        }
+    }
 
     public void UpdatePorts(int port, int? httpsPort)
     {
@@ -140,6 +155,8 @@ public sealed class AppState
     {
         lock (_gate)
         {
+            var rescan = (update.FolderPath is not null && !string.Equals(update.FolderPath.Trim(), _settings.FolderPath, StringComparison.OrdinalIgnoreCase))
+                || (update.IncludeSubfolders.HasValue && update.IncludeSubfolders != _settings.IncludeSubfolders);
             if (update.FolderPath is not null)
             {
                 _settings.FolderPath = string.IsNullOrWhiteSpace(update.FolderPath) ? null : update.FolderPath.Trim();
@@ -164,6 +181,7 @@ public sealed class AppState
             {
                 _settings.ImageMode = update.ImageMode;
             }
+            if (update.PlaybackOrder is not null) { _settings.PlaybackOrder = update.PlaybackOrder; }
 
             if (update.SyncWorkers.HasValue)
             {
@@ -181,9 +199,8 @@ public sealed class AppState
                 RememberCurrentSlideshow(_settings);
             }
             _settingsStore.Save(_settings);
+            if (rescan) { _catalog.Scan(_settings.Copy()); }
         }
-
-        Rescan();
     }
 
     public void UpdatePlaybackSettings(PlaybackSettingsUpdateDto update)
@@ -204,6 +221,7 @@ public sealed class AppState
             {
                 _settings.ImageMode = update.ImageMode;
             }
+            if (update.PlaybackOrder is not null) { _settings.PlaybackOrder = update.PlaybackOrder; }
 
             _settings.Normalize();
             _settingsStore.Save(_settings);
@@ -251,6 +269,7 @@ public sealed class AppState
     {
         return NetworkInterface.GetAllNetworkInterfaces()
             .Where(adapter => adapter.OperationalStatus == OperationalStatus.Up)
+            .OrderByDescending(adapter => adapter.GetIPProperties().GatewayAddresses.Any(gateway => !gateway.Address.Equals(IPAddress.Any)))
             .SelectMany(adapter => adapter.GetIPProperties().UnicastAddresses)
             .Where(address => address.Address.AddressFamily == AddressFamily.InterNetwork)
             .Select(address => address.Address)
@@ -290,11 +309,14 @@ public sealed record StateDto(
     string[] HttpsLanSlideshowUrls,
     string CertificateUrl,
     string HttpsCertificateUrl,
-    RecentSlideshowDto[] RecentSlideshows);
+    RecentSlideshowDto[] RecentSlideshows,
+    string PlaybackOrder,
+    string ComputerName,
+    int ConnectedViewers);
 
 public sealed record RecentSlideshowDto(string FolderPath, string FolderName, DateTimeOffset LastUsedAt);
 
-public sealed record ImageDto(int Id, string Name, string Url, string CacheKey);
+public sealed record ImageDto(int Id, string Name, string Url, string CacheKey, long SizeBytes, long ModifiedAt);
 
 public sealed record OfflineSourceDto(StateDto State, IReadOnlyList<ImageDto> Images);
 
@@ -305,6 +327,7 @@ public sealed class SettingsUpdateDto
     public int? SlideSeconds { get; set; }
     public string? BackgroundColor { get; set; }
     public string? ImageMode { get; set; }
+    public string? PlaybackOrder { get; set; }
     public int? SyncWorkers { get; set; }
     public bool? StartAtLogin { get; set; }
 }
@@ -314,6 +337,7 @@ public sealed class PlaybackSettingsUpdateDto
     public int? SlideSeconds { get; set; }
     public string? BackgroundColor { get; set; }
     public string? ImageMode { get; set; }
+    public string? PlaybackOrder { get; set; }
 }
 
-public sealed record ViewerHeartbeatDto(bool Active);
+public sealed record ViewerHeartbeatDto(bool Active, string? ViewerId = null);

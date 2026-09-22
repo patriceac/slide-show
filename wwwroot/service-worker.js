@@ -1,12 +1,13 @@
-const CACHE_NAME = "slide-show-shell-20260817-cinematic-player5";
+const CACHE_NAME = "slide-show-shell-20260922-workflows";
 const SHELL_URLS = [
   "/show",
   "/manifest.webmanifest",
-  "/assets/slideshow.css?v=20260817-cinematic-player5",
-  "/assets/slideshow.js?v=20260817-cinematic-player5",
-  "/assets/offline-crypto.js?v=20260529-offline2",
-  "/assets/offline-store.js?v=20260529-offline2",
-  "/assets/offline-sync.js?v=20260603-auto-refresh",
+  "/assets/playback-state.js?v=20260922-workflows",
+  "/assets/slideshow.css?v=20260922-workflows",
+  "/assets/slideshow.js?v=20260922-workflows",
+  "/assets/offline-crypto.js?v=20260922-workflows",
+  "/assets/offline-store.js?v=20260922-workflows",
+  "/assets/offline-sync.js?v=20260922-workflows",
   "/assets/darkroom-stage.png"
 ];
 
@@ -48,7 +49,7 @@ self.addEventListener("fetch", event => {
     return;
   }
 
-  if (event.request.mode === "navigate" || url.pathname === "/" || url.pathname === "/show") {
+  if (url.pathname === "/show") {
     event.respondWith(
       fetch(event.request)
         .then(response => {
@@ -61,6 +62,7 @@ self.addEventListener("fetch", event => {
     return;
   }
 
+  if (event.request.mode === 'navigate') return;
   event.respondWith(
     caches.match(event.request)
       .then(cached => cached || fetch(event.request).then(response => {

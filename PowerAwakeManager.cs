@@ -8,14 +8,17 @@ public sealed class PowerAwakeManager : IDisposable
     private const uint ES_SYSTEM_REQUIRED = 0x00000001;
 
     private readonly ViewerActivityTracker _viewerActivity;
+    private readonly Func<bool> _localWindowVisible;
     private readonly System.Threading.Timer _timer;
     private readonly SafeFileHandle _powerRequest;
     private readonly object _gate = new();
     private bool _holdingRequest;
+    private bool _holdingDisplay;
 
-    public PowerAwakeManager(ViewerActivityTracker viewerActivity)
+    public PowerAwakeManager(ViewerActivityTracker viewerActivity, Func<bool>? localWindowVisible = null)
     {
         _viewerActivity = viewerActivity;
+        _localWindowVisible = localWindowVisible ?? (() => false);
         var reason = new ReasonContext
         {
             Version = 0,
@@ -29,21 +32,22 @@ public sealed class PowerAwakeManager : IDisposable
     public void Dispose()
     {
         _timer.Dispose();
-        SetRequestHeld(false);
+        SetRequestHeld(false, false);
         _powerRequest.Dispose();
     }
 
     private void CheckViewerActivity(object? state)
     {
-        var hasActiveViewer = _viewerActivity.HasActiveRemoteViewer();
-        SetRequestHeld(hasActiveViewer);
+        var localViewer = _localWindowVisible() || _viewerActivity.HasActiveLocalViewer();
+        var hasActiveViewer = localViewer || _viewerActivity.HasActiveRemoteViewer();
+        SetRequestHeld(hasActiveViewer, localViewer);
         if (hasActiveViewer)
         {
             SetThreadExecutionState(ES_SYSTEM_REQUIRED);
         }
     }
 
-    private void SetRequestHeld(bool shouldHold)
+    private void SetRequestHeld(bool shouldHold, bool holdDisplay)
     {
         if (_powerRequest.IsInvalid || _powerRequest.IsClosed)
         {
@@ -52,6 +56,13 @@ public sealed class PowerAwakeManager : IDisposable
 
         lock (_gate)
         {
+            if (holdDisplay != _holdingDisplay)
+            {
+                var changed = holdDisplay
+                    ? PowerSetRequest(_powerRequest, PowerRequestType.PowerRequestDisplayRequired)
+                    : PowerClearRequest(_powerRequest, PowerRequestType.PowerRequestDisplayRequired);
+                if (changed) { _holdingDisplay = holdDisplay; }
+            }
             if (shouldHold == _holdingRequest)
             {
                 return;

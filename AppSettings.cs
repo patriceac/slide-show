@@ -8,6 +8,7 @@ public sealed class AppSettings
     public int SlideSeconds { get; set; } = 7;
     public string BackgroundColor { get; set; } = "#05070a";
     public string ImageMode { get; set; } = "fit";
+    public string PlaybackOrder { get; set; } = "shuffle";
     public int SyncWorkers { get; set; } = 4;
     public int Port { get; set; } = 5177;
     public int HttpsPort { get; set; } = 5178;
@@ -23,6 +24,7 @@ public sealed class AppSettings
         SlideSeconds = SlideSeconds,
         BackgroundColor = BackgroundColor,
         ImageMode = ImageMode,
+        PlaybackOrder = PlaybackOrder,
         SyncWorkers = SyncWorkers,
         Port = Port,
         HttpsPort = HttpsPort,
@@ -46,6 +48,7 @@ public sealed class AppSettings
         }
 
         ImageMode = string.Equals(ImageMode, "full", StringComparison.OrdinalIgnoreCase) ? "full" : "fit";
+        PlaybackOrder = PlaybackOrder is "name" or "date" ? PlaybackOrder : "shuffle";
 
         if (string.IsNullOrWhiteSpace(FolderPath))
         {

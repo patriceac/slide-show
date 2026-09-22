@@ -101,42 +101,21 @@ export async function getLocalKey(catalogId) {
   return record?.key || null;
 }
 
-async function deleteImagesForCatalog(catalogId) {
-  const db = await openDatabase();
-  const transaction = db.transaction("images", "readwrite");
-  const images = transaction.objectStore("images");
-  const index = images.index("catalogId");
-
-  await new Promise((resolve, reject) => {
-    const cursorRequest = index.openCursor(IDBKeyRange.only(catalogId));
-    cursorRequest.onsuccess = () => {
-      const cursor = cursorRequest.result;
-      if (!cursor) {
-        resolve();
-        return;
-      }
-      cursor.delete();
-      cursor.continue();
-    };
-    cursorRequest.onerror = () => reject(cursorRequest.error);
-  });
-
-  await transactionDone(transaction);
-}
-
 export async function deleteCatalog(catalogId) {
-  await deleteImagesForCatalog(catalogId);
   const db = await openDatabase();
-  const transaction = db.transaction(["catalogs", "keys"], "readwrite");
+  const transaction = db.transaction(["catalogs", "images", "keys"], "readwrite");
+  const done = transactionDone(transaction);
   transaction.objectStore("catalogs").delete(catalogId);
   transaction.objectStore("keys").delete(catalogId);
-  await transactionDone(transaction);
+  const request = transaction.objectStore("images").index("catalogId").openCursor(IDBKeyRange.only(catalogId));
+  request.onsuccess = () => { const cursor = request.result; if (cursor) { cursor.delete(); cursor.continue(); } };
+  await done;
 }
 
 export async function saveCatalogBundle(catalog, imageRecords, localKey) {
-  await deleteImagesForCatalog(catalog.id);
   const db = await openDatabase();
   const transaction = db.transaction(["catalogs", "images", "keys"], "readwrite");
+  const done = transactionDone(transaction);
   transaction.objectStore("catalogs").put(catalog);
   if (localKey) {
     transaction.objectStore("keys").put({ id: catalog.id, key: localKey });
@@ -144,10 +123,17 @@ export async function saveCatalogBundle(catalog, imageRecords, localKey) {
     transaction.objectStore("keys").delete(catalog.id);
   }
   const images = transaction.objectStore("images");
-  for (const record of imageRecords) {
-    images.put(record);
-  }
-  await transactionDone(transaction);
+  const cursorRequest = images.index("catalogId").openCursor(IDBKeyRange.only(catalog.id));
+  cursorRequest.onsuccess = () => {
+    const cursor = cursorRequest.result;
+    if (cursor) { cursor.delete(); cursor.continue(); }
+    else {
+      try { for (const record of imageRecords) images.put(record); }
+      catch { transaction.abort(); }
+    }
+  };
+  // Replacement and key changes commit together. A failed write retains the old copy.
+  await done;
 }
 
 export async function updateCatalog(catalog) {

@@ -11,10 +11,10 @@ public sealed class SettingsStore
 
     private readonly string _settingsPath;
 
-    public SettingsStore()
+    public SettingsStore(string? settingsPath = null)
     {
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        _settingsPath = Path.Combine(appData, "Slide Show", "settings.json");
+        _settingsPath = settingsPath ?? Path.Combine(appData, "Slide Show", "settings.json");
     }
 
     public AppSettings Load()

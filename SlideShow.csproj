@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <Compile Remove="installer\**\*.cs" />
+    <Compile Remove="tests\**\*.cs;work\**\*.cs" />
   </ItemGroup>
 
   <ItemGroup>

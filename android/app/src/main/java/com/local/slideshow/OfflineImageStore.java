@@ -4,6 +4,10 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.Build;
+import android.os.StatFs;
+import android.system.Os;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CancellationException;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.util.Base64;
@@ -204,6 +208,10 @@ final class OfflineImageStore {
     }
 
     OfflineCatalog sync(int slotId, String serverKey, String serverName, String baseUrl, JSONObject state, JSONArray imageList, int syncWorkers, ProgressListener listener) throws Exception {
+        return sync(slotId, serverKey, serverName, baseUrl, state, imageList, syncWorkers, listener, new AtomicBoolean());
+    }
+
+    OfflineCatalog sync(int slotId, String serverKey, String serverName, String baseUrl, JSONObject state, JSONArray imageList, int syncWorkers, ProgressListener listener, AtomicBoolean canceled) throws Exception {
         if (!isValidSlot(slotId)) {
             throw new IllegalArgumentException("Invalid offline slot.");
         }
@@ -221,11 +229,21 @@ final class OfflineImageStore {
 
         List<MainActivity.SlideImage> nextImages = imagesForSource(serverKey, imageList);
 
+        long required = 0;
+        for (int i=0; i<imageList.length(); i++) required += imageList.getJSONObject(i).optLong("sizeBytes",0) + 64;
+        if (required > new StatFs(rootDirectory.getAbsolutePath()).getAvailableBytes()) throw new IllegalStateException("Not enough storage. Free space or choose a smaller folder. Existing saved photos are unchanged.");
+        checkCanceled(canceled);
         AtomicInteger completedCount = new AtomicInteger();
         int workerCount = normalizeSyncWorkers(syncWorkers);
-        downloadImages(slotId, baseUrl, nextImages, workerCount, listener, completedCount);
-
-        purgeRemovedImages(slotId, nextImages);
+        try {
+            downloadImages(slotId, baseUrl, nextImages, workerCount, listener, completedCount, canceled);
+            checkCanceled(canceled);
+        } catch (Exception error) {
+            Set<String> retained = new HashSet<>();
+            if (existing != null) for (MainActivity.SlideImage image : existing.images) retained.add(image.encryptedFileName);
+            for (MainActivity.SlideImage image : nextImages) if (!retained.contains(image.encryptedFileName)) imageFile(slotId, image).delete();
+            throw error;
+        }
 
         boolean preserveProtection = existing != null && (folderIdentity.equals(existing.folderIdentity) || legacyFolderIdentity.equals(existing.folderIdentity));
         OfflineCatalog catalog = new OfflineCatalog(
@@ -246,13 +264,17 @@ final class OfflineImageStore {
             preserveProtection ? existing.pinHash : "",
             nextImages);
 
+        catalog.playbackOrder = state.optString("playbackOrder", "shuffle");
+        long savedBytes = 0;
+        for (MainActivity.SlideImage image : nextImages) savedBytes += imageFile(slotId, image).length();
+        catalog = catalog.withSize(savedBytes);
+        checkCanceled(canceled);
         writeCatalog(catalog);
-        catalog = catalog.withSize(catalogSizeBytes(slotId));
-        writeCatalog(catalog);
+        purgeRemovedImages(slotId, nextImages);
         return catalog;
     }
 
-    private List<MainActivity.SlideImage> imagesForSource(String serverKey, JSONArray imageList) throws Exception {
+    List<MainActivity.SlideImage> imagesForSource(String serverKey, JSONArray imageList) throws Exception {
         List<MainActivity.SlideImage> nextImages = new ArrayList<>();
         for (int i = 0; i < imageList.length(); i++) {
             JSONObject item = imageList.optJSONObject(i);
@@ -268,7 +290,7 @@ final class OfflineImageStore {
             }
 
             String sourceCacheKey = cacheKey.isEmpty() ? legacyCacheKey(path, name) : cacheKey;
-            nextImages.add(new MainActivity.SlideImage(name, path, encryptedFileName(serverKey, offlineCacheKey(sourceCacheKey))));
+            nextImages.add(new MainActivity.SlideImage(name, path, encryptedFileName(serverKey, offlineCacheKey(sourceCacheKey)), item.optLong("modifiedAt",0)));
         }
 
         return nextImages;
@@ -460,13 +482,32 @@ final class OfflineImageStore {
         return decodeBitmap(catalog, image);
     }
 
+    private static void checkCanceled(AtomicBoolean canceled) {
+        if (canceled.get() || Thread.currentThread().isInterrupted()) throw new CancellationException("Download canceled. Your previous saved copy is unchanged.");
+    }
+
+    Bitmap decodeOnlineBitmap(String address, int width, int height) throws Exception {
+        HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
+        connection.setConnectTimeout(4000); connection.setReadTimeout(15000);
+        try (InputStream input = connection.getInputStream()) {
+            byte[] bytes = readFully(input);
+            BitmapFactory.Options bounds = new BitmapFactory.Options(); bounds.inJustDecodeBounds=true;
+            BitmapFactory.decodeByteArray(bytes,0,bytes.length,bounds);
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inSampleSize = calculateInSampleSize(bounds.outWidth,bounds.outHeight,width,height);
+            Bitmap bitmap = BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);
+            if (bitmap == null) throw new IllegalStateException("Unsupported photo format. Try JPG, PNG or WebP.");
+            return bitmap;
+        } finally { connection.disconnect(); }
+    }
+
     private void downloadImages(
         int slotId,
         String baseUrl,
         List<MainActivity.SlideImage> images,
         int syncWorkers,
         ProgressListener listener,
-        AtomicInteger completedCount) throws Exception {
+        AtomicInteger completedCount, AtomicBoolean canceled) throws Exception {
         int total = images.size();
         if (total == 0) {
             return;
@@ -479,13 +520,15 @@ final class OfflineImageStore {
         try {
             for (MainActivity.SlideImage image : images) {
                 futures.add(downloadExecutor.submit(() -> {
+                    checkCanceled(canceled);
                     File imageFile = imageFile(slotId, image);
                     ImageStorageKind storageKind = imageStorageKind(imageFile);
                     boolean needsDownload = storageKind != ImageStorageKind.MEDIA_ENCRYPTED;
                     if (needsDownload) {
                         try {
-                            downloadOptimizedMediaEncrypted(baseUrl + image.path, imageFile);
+                            downloadOptimizedMediaEncrypted(baseUrl + image.path, imageFile, canceled);
                         } catch (Exception error) {
+                            checkCanceled(canceled);
                             if (storageKind == ImageStorageKind.MISSING) {
                                 throw error;
                             }
@@ -520,10 +563,11 @@ final class OfflineImageStore {
             }
         } finally {
             downloadExecutor.shutdownNow();
+            downloadExecutor.awaitTermination(25, java.util.concurrent.TimeUnit.SECONDS);
         }
     }
 
-    private void downloadOptimizedMediaEncrypted(String address, File destination) throws Exception {
+    private void downloadOptimizedMediaEncrypted(String address, File destination, AtomicBoolean canceled) throws Exception {
         File partial = new File(destination.getParentFile(), destination.getName() + ".part");
         if (partial.exists() && !partial.delete()) {
             throw new IllegalStateException("Could not replace partial download.");
@@ -542,20 +586,20 @@ final class OfflineImageStore {
                 throw new IllegalStateException("Image download failed.");
             }
 
-            try (InputStream input = connection.getInputStream()) {
+            try (InputStream input = new java.io.FilterInputStream(connection.getInputStream()) {
+                @Override public int read(byte[] bytes, int offset, int length) throws java.io.IOException {
+                    checkCanceled(canceled); return super.read(bytes,offset,length);
+                }
+                @Override public int read() throws java.io.IOException { checkCanceled(canceled); return super.read(); }
+            }) {
                 int length = connection.getContentLength();
                 if (length > 0 && length <= MAX_OPTIMIZE_SOURCE_BYTES) {
                     writeOptimizedMediaEncryptedFile(partial, readFully(input));
                 } else {
                     writeMediaEncryptedFile(partial, input);
                 }
-                if (destination.exists() && !destination.delete()) {
-                    throw new IllegalStateException("Could not replace image.");
-                }
-
-                if (!partial.renameTo(destination)) {
-                    throw new IllegalStateException("Could not store image.");
-                }
+                checkCanceled(canceled);
+                Os.rename(partial.getAbsolutePath(), destination.getAbsolutePath());
             }
         } finally {
             connection.disconnect();
@@ -596,7 +640,12 @@ final class OfflineImageStore {
 
     private void writeCatalog(OfflineCatalog catalog) throws Exception {
         ensureDirectories(catalog.slotId);
-        writeEncrypted(catalogFile(catalog.slotId), catalog.toJson().toString().getBytes(StandardCharsets.UTF_8));
+        File destination = catalogFile(catalog.slotId);
+        File temporary = new File(destination.getParentFile(), "catalog.next");
+        try {
+            writeEncrypted(temporary, catalog.toJson().toString().getBytes(StandardCharsets.UTF_8));
+            Os.rename(temporary.getAbsolutePath(), destination.getAbsolutePath());
+        } finally { temporary.delete(); }
     }
 
     private void writeEncrypted(File destination, byte[] plaintext) throws Exception {
@@ -1081,6 +1130,7 @@ final class OfflineImageStore {
         final String backgroundColor;
         final String imageMode;
         final int slideSeconds;
+        String playbackOrder = "shuffle";
         final long serverVersion;
         final long syncedAt;
         final long sizeBytes;
@@ -1109,15 +1159,15 @@ final class OfflineImageStore {
         }
 
         OfflineCatalog withDisplayName(String nextDisplayName) {
-            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, nextDisplayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, pinSalt, pinHash, images);
+            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, nextDisplayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, pinSalt, pinHash, images).withOrder(playbackOrder);
         }
 
         OfflineCatalog withSize(long nextSizeBytes) {
-            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, nextSizeBytes, offlineImageFormat, pinSalt, pinHash, images);
+            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, nextSizeBytes, offlineImageFormat, pinSalt, pinHash, images).withOrder(playbackOrder);
         }
 
         OfflineCatalog withPin(String nextPinSalt, String nextPinHash) {
-            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, nextPinSalt, nextPinHash, images);
+            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, nextPinSalt, nextPinHash, images).withOrder(playbackOrder);
         }
 
         OfflineCatalog withRecoveredImages(List<MainActivity.SlideImage> recoveredImages) {
@@ -1125,8 +1175,10 @@ final class OfflineImageStore {
                 return this;
             }
 
-            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, pinSalt, pinHash, recoveredImages);
+            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, pinSalt, pinHash, recoveredImages).withOrder(playbackOrder);
         }
+
+        OfflineCatalog withOrder(String order) { playbackOrder = "name".equals(order) || "date".equals(order) ? order : "shuffle"; return this; }
 
         boolean hasPin() {
             return !pinSalt.isEmpty() && !pinHash.isEmpty();
@@ -1146,6 +1198,7 @@ final class OfflineImageStore {
             object.put("folderName", folderName);
             object.put("backgroundColor", backgroundColor);
             object.put("imageMode", imageMode);
+            object.put("playbackOrder", playbackOrder);
             object.put("slideSeconds", slideSeconds);
             object.put("serverVersion", serverVersion);
             object.put("syncedAt", syncedAt);
@@ -1160,6 +1213,7 @@ final class OfflineImageStore {
                 item.put("name", image.name);
                 item.put("path", image.path);
                 item.put("encryptedFileName", image.encryptedFileName);
+                item.put("modifiedAt", image.modifiedAt);
                 imageArray.put(item);
             }
             object.put("images", imageArray);
@@ -1176,7 +1230,7 @@ final class OfflineImageStore {
                         String path = item.optString("path", "");
                         String encryptedFileName = item.optString("encryptedFileName", "");
                         if (!encryptedFileName.isEmpty()) {
-                            images.add(new MainActivity.SlideImage(item.optString("name", "Image"), path, encryptedFileName));
+                            images.add(new MainActivity.SlideImage(item.optString("name", "Image"), path, encryptedFileName, item.optLong("modifiedAt",0)));
                         }
                     }
                 }
@@ -1203,7 +1257,7 @@ final class OfflineImageStore {
                 object.optString("offlineImageFormat", ""),
                 object.optString("pinSalt", ""),
                 object.optString("pinHash", ""),
-                images);
+                images).withOrder(object.optString("playbackOrder", "shuffle"));
         }
     }
 }
