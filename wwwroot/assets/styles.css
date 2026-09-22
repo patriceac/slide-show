@@ -179,3 +179,10 @@ dialog details p { font-size: 12px; color: var(--muted); }
 .appearance-settings { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px 0; border-top: 1px solid var(--line); }
 .appearance-settings .hint { margin: 6px 0 0; }
 .appearance-settings select { min-width: 120px; }
+
+@media (min-width: 801px) {
+  .shell { height: calc(100dvh - 70px); }
+  .workspace, .current { display: flex; flex-direction: column; min-height: 0; }
+  .current, .stage-media { flex: 1; }
+  .stage-media { height: auto; }
+}
