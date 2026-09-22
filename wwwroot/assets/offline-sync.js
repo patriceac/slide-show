@@ -6,7 +6,7 @@ import {
   encryptBlob,
   generateLocalKey,
   randomBytes
-} from "./offline-crypto.js?v=20260922-workflows";
+} from "./offline-crypto.js?v=20260922-gallery";
 import {
   MAX_CATALOGS,
   findCatalogByIdentity,
@@ -14,7 +14,7 @@ import {
   listCatalogs,
   makeServerKey,
   saveCatalogBundle
-} from "./offline-store.js?v=20260922-workflows";
+} from "./offline-store.js?v=20260922-gallery";
 
 function cleanName(value, fallback = "Slide Show") {
   return (value || "").trim() || fallback;

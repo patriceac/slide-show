@@ -7,6 +7,9 @@ import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.DhcpInfo;
 import android.net.wifi.WifiManager;
 import android.os.Build;
@@ -67,10 +70,12 @@ public class MainActivity extends Activity {
     private static final String DISCOVERY_PROBE = "SLIDE_SHOW_DISCOVER_V1";
     private static final String LOG_TAG = "SlideShowAndroid";
     private static final long SERVER_FOLDER_WATCH_MS = 5000;
-    private static final int INK = Color.rgb(23, 32, 29);
-    private static final int MUTED = Color.rgb(99, 113, 108);
-    private static final int ACCENT = Color.rgb(23, 108, 95);
-    private static final int SURFACE = Color.rgb(246, 247, 244);
+    private static final int INK = Color.rgb(36, 43, 53);
+    private static final int MUTED = Color.rgb(105, 117, 134);
+    private static final int ACCENT = Color.rgb(53, 76, 101);
+    private static final int SURFACE = Color.rgb(250, 250, 249);
+    private static final int LINE = Color.rgb(231, 232, 233);
+    private static final int OVERLAY = Color.argb(210, 29, 36, 47);
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final ExecutorService imageExecutor = Executors.newSingleThreadExecutor();
@@ -335,17 +340,28 @@ public class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         LinearLayout shell = new LinearLayout(this);
         shell.setOrientation(LinearLayout.VERTICAL);
-        shell.setPadding(dp(24), dp(42), dp(24), dp(28));
+        shell.setPadding(dp(24), dp(32), dp(24), dp(28));
+        scroll.setFillViewport(true);
         scroll.addView(shell);
 
-        TextView eyebrow = text("Local network", 13, MUTED, true);
-        shell.addView(eyebrow);
+        LinearLayout brand = new LinearLayout(this);
+        brand.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView brandIcon = new ImageView(this);
+        brandIcon.setImageResource(R.drawable.ic_photo);
+        LinearLayout.LayoutParams brandIconParams = new LinearLayout.LayoutParams(dp(24), dp(24));
+        brandIconParams.rightMargin = dp(10);
+        brand.addView(brandIcon, brandIconParams);
+        brand.addView(text("Slide Show", 18, INK, true));
+        shell.addView(brand);
+        TextView libraryTitle = text("Library", 34, INK, true);
+        libraryTitle.setPadding(0, dp(32), 0, dp(20));
+        shell.addView(libraryTitle);
 
-        discoveryTitle = text(title, 30, INK, true);
-        discoveryTitle.setPadding(0, dp(6), 0, dp(8));
+        discoveryTitle = text(title, 16, INK, true);
+        discoveryTitle.setPadding(0, 0, 0, dp(5));
         shell.addView(discoveryTitle);
 
-        discoveryMessage = text(message, 16, MUTED, false);
+        discoveryMessage = text(message, 14, MUTED, false);
         discoveryMessage.setLineSpacing(0, 1.15f);
         shell.addView(discoveryMessage);
 
@@ -353,10 +369,10 @@ public class MainActivity extends Activity {
         discoveryProgress.setIndeterminate(true);
         discoveryProgress.setIndeterminateTintList(ColorStateList.valueOf(ACCENT));
         discoveryProgress.setProgressTintList(ColorStateList.valueOf(ACCENT));
-        discoveryProgress.setProgressBackgroundTintList(ColorStateList.valueOf(Color.rgb(214, 220, 216)));
+        discoveryProgress.setProgressBackgroundTintList(ColorStateList.valueOf(LINE));
         discoveryProgress.setVisibility(View.GONE);
-        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(-1, dp(6));
-        progressParams.setMargins(0, dp(24), 0, dp(16));
+        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(-1, dp(3));
+        progressParams.setMargins(0, dp(16), 0, 0);
         shell.addView(discoveryProgress, progressParams);
 
         discoveryList = new LinearLayout(this);
@@ -373,6 +389,7 @@ public class MainActivity extends Activity {
         actions.addView(searchAgain, fullButtonParams());
 
         Button manual = button("Enter address manually", false);
+        manual.setBackground(buttonBackground(Color.TRANSPARENT, false));
         manual.setOnClickListener(v -> showManualAddressDialog());
         actions.addView(manual, fullButtonParams());
 
@@ -534,13 +551,13 @@ public class MainActivity extends Activity {
 
     private String savedCatalogSummary(OfflineImageStore.OfflineCatalog catalog) {
         if (catalog.hasPin() && !isCatalogUnlocked(catalog)) {
-            return "Protected saved slideshow";
+            return "PIN protected";
         }
 
-        String status = catalog.images.isEmpty() ? "Saved offline entry" : "Saved for offline playback";
-        String fileCount = catalog.images.size() == 1 ? "1 image" : catalog.images.size() + " images";
-        String details = status + " - " + fileCount + " - " + sizeText(catalog.sizeBytes);
-        return catalog.hasPin() ? details + " - Protected" : details;
+        if (catalog.images.isEmpty()) return "No photos saved";
+        String fileCount = catalog.images.size() == 1 ? "1 photo" : catalog.images.size() + " photos";
+        String details = fileCount + " · " + sizeText(catalog.sizeBytes);
+        return catalog.hasPin() ? details + " · PIN protected" : details;
     }
 
     private String sizeText(long bytes) {
@@ -594,25 +611,35 @@ public class MainActivity extends Activity {
         discoveryList.removeAllViews();
         int count = discovered.size();
         if (count == 1) {
-            discoveryTitle.setText("Slide Show found");
+            discoveryTitle.setText("PC available");
         } else if (count > 1) {
-            discoveryTitle.setText("Choose a Slide Show server");
+            discoveryTitle.setText("Choose a PC");
         }
+        discoveryMessage.setText("Play directly from a PC on this Wi-Fi.");
 
         for (ServerInfo info : discovered.values()) {
             LinearLayout row = card();
-            TextView name = text(info.name, 19, INK, true);
-            row.addView(name);
-            TextView address = text(info.host + ":" + info.port, 14, MUTED, false);
-            address.setPadding(0, dp(4), 0, dp(12));
-            row.addView(address);
+            LinearLayout heading = new LinearLayout(this);
+            heading.setGravity(Gravity.CENTER_VERTICAL);
+            ImageView pcIcon = new ImageView(this);
+            pcIcon.setImageResource(R.drawable.ic_computer);
+            LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(32), dp(32));
+            iconParams.rightMargin = dp(14);
+            heading.addView(pcIcon, iconParams);
+            LinearLayout identity = new LinearLayout(this);
+            identity.setOrientation(LinearLayout.VERTICAL);
+            identity.addView(text(info.name, 17, INK, true));
+            TextView address = text(info.host + ":" + info.port, 13, MUTED, false);
+            identity.addView(address);
+            heading.addView(identity, new LinearLayout.LayoutParams(0, -2, 1));
+            row.addView(heading);
             Button connect = button("Play from this PC", true);
             connect.setOnClickListener(v -> connectTo(info));
             row.addView(connect, fullButtonParams());
             discoveryList.addView(row, cardParams());
         }
         List<OfflineImageStore.OfflineCatalog> saved = offlineStore.loadCatalogs();
-        if (!saved.isEmpty()) discoveryList.addView(text("Saved on this device", 20, INK, true));
+        if (!saved.isEmpty()) addSavedHeading();
         for (OfflineImageStore.OfflineCatalog catalog : saved) discoveryList.addView(offlineCatalogCard(catalog, true), cardParams());
     }
 
@@ -650,32 +677,79 @@ public class MainActivity extends Activity {
         }
 
         discoveryList.removeAllViews();
+        if (!catalogs.isEmpty()) addSavedHeading();
         for (OfflineImageStore.OfflineCatalog catalog : catalogs) {
             discoveryList.addView(offlineCatalogCard(catalog, true), cardParams());
         }
     }
 
+    private void addSavedHeading() {
+        TextView heading = text("Saved on this device", 16, INK, true);
+        heading.setPadding(0, dp(28), 0, dp(2));
+        discoveryList.addView(heading);
+    }
+
     private LinearLayout offlineCatalogCard(OfflineImageStore.OfflineCatalog catalog, boolean allowDelete) {
         LinearLayout row = card();
-        TextView name = text(cleanFolderName(catalog.displayName), 19, INK, true);
-        row.addView(name);
-        TextView details = text(savedCatalogSummary(catalog), 14, MUTED, false);
-        details.setPadding(0, dp(4), 0, dp(4));
-        row.addView(details);
-        TextView saved = text("Saved " + savedDateText(catalog.syncedAt), 14, MUTED, false);
-        saved.setPadding(0, 0, 0, dp(12));
-        row.addView(saved);
+        LinearLayout heading = new LinearLayout(this);
+        heading.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView thumbnail = new ImageView(this);
+        thumbnail.setImageResource(catalog.hasPin() ? R.drawable.ic_lock : R.drawable.ic_photo);
+        thumbnail.setScaleType(ImageView.ScaleType.CENTER);
+        thumbnail.setBackground(rounded(Color.rgb(241, 243, 245), 8, false));
+        thumbnail.setClipToOutline(true);
+        thumbnail.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        LinearLayout.LayoutParams thumbnailParams = new LinearLayout.LayoutParams(dp(76), dp(82));
+        thumbnailParams.rightMargin = dp(16);
+        heading.addView(thumbnail, thumbnailParams);
+        // Protected collections never reveal a preview in the library, even after unlocking.
+        if (!catalog.hasPin() && !catalog.images.isEmpty()) {
+            preloadExecutor.execute(() -> {
+                try {
+                    Bitmap preview = offlineStore.decodeBitmap(catalog, catalog.images.get(0), dp(152), dp(164));
+                    handler.post(() -> {
+                        if (!isDestroyed() && thumbnail.isAttachedToWindow()) {
+                            thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                            thumbnail.setImageBitmap(preview);
+                        } else preview.recycle();
+                    });
+                } catch (Exception error) {
+                    Log.d(LOG_TAG, "Saved collection preview unavailable", error);
+                }
+            });
+        }
+        LinearLayout identity = new LinearLayout(this);
+        identity.setOrientation(LinearLayout.VERTICAL);
+        TextView name = text(cleanFolderName(catalog.displayName), 18, INK, true);
+        name.setMaxLines(2);
+        name.setEllipsize(TextUtils.TruncateAt.END);
+        identity.addView(name);
+        TextView details = text(savedCatalogSummary(catalog), 13, MUTED, false);
+        details.setPadding(0, dp(2), 0, dp(2));
+        identity.addView(details);
+        identity.addView(text("Saved " + savedDateText(catalog.syncedAt), 12, MUTED, false));
+        heading.addView(identity, new LinearLayout.LayoutParams(0, -2, 1));
+        row.addView(heading);
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        if (allowDelete) row.addView(actions, fullButtonParams());
 
         if (canTryOpenOffline(catalog)) {
             Button open = button("Play offline", true);
             open.setOnClickListener(v -> openOfflineCatalog(catalog));
-            row.addView(open, fullButtonParams());
+            if (allowDelete) actions.addView(open, new LinearLayout.LayoutParams(0, -2, 1));
+            else row.addView(open, fullButtonParams());
         }
 
         if (allowDelete) {
-            Button delete = button("Delete saved slideshow", false);
+            Button delete = button("Delete", false);
+            delete.setContentDescription("Delete saved slideshow " + cleanFolderName(catalog.displayName));
+            delete.setBackground(buttonBackground(Color.TRANSPARENT, false));
             delete.setOnClickListener(v -> ensureCatalogUnlocked(catalog, () -> confirmDeleteCatalog(reloadCatalog(catalog), false)));
-            row.addView(delete, fullButtonParams());
+            LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(-2, -2);
+            deleteParams.leftMargin = dp(8);
+            actions.addView(delete, deleteParams);
         }
         return row;
     }
@@ -1216,7 +1290,7 @@ public class MainActivity extends Activity {
         counterPill.addView(positionText);
 
         LinearLayout.LayoutParams folderParams = new LinearLayout.LayoutParams(0, -2, 1);
-        folderParams.setMargins(0, 0, dp(12), 0);
+        folderParams.setMargins(dp(8), 0, dp(8), 0);
         top.addView(folderPill, folderParams);
         top.addView(counterPill, new LinearLayout.LayoutParams(-2, -2));
         chrome.addView(top, new LinearLayout.LayoutParams(-1, -2));
@@ -1228,9 +1302,16 @@ public class MainActivity extends Activity {
         settingsButton.setOnClickListener(v -> toggleSettingsPanel());
         playbackControls = new LinearLayout(this);
         playbackControls.setGravity(Gravity.CENTER);
+        playbackControls.setPadding(dp(4), dp(6), dp(4), dp(6));
+        playbackControls.setBackground(rounded(OVERLAY, 14, false));
         Button previous = overlayButton("Previous"); previous.setOnClickListener(v -> advance(-1));
         pauseButton = overlayButton("Pause"); pauseButton.setOnClickListener(v -> togglePlay());
         Button next = overlayButton("Next"); next.setOnClickListener(v -> advance(1));
+        previous.setBackground(buttonBackground(Color.TRANSPARENT, false));
+        next.setBackground(buttonBackground(Color.TRANSPARENT, false));
+        settingsButton.setBackground(buttonBackground(Color.TRANSPARENT, false));
+        pauseButton.setBackground(buttonBackground(Color.rgb(239, 243, 248), false));
+        pauseButton.setTextColor(INK);
         playbackControls.addView(previous,controlParams()); playbackControls.addView(pauseButton,controlParams());
         playbackControls.addView(next,controlParams()); playbackControls.addView(settingsButton,controlParams());
         chrome.addView(playbackControls,new LinearLayout.LayoutParams(-1,-2));
@@ -1242,11 +1323,13 @@ public class MainActivity extends Activity {
 
         settingsPanel = new LinearLayout(this);
         settingsPanel.setOrientation(LinearLayout.VERTICAL);
-        settingsPanel.setPadding(dp(18), dp(16), dp(18), dp(18));
-        settingsPanel.setBackgroundColor(Color.argb(235, 9, 13, 16));
+        settingsPanel.setPadding(dp(20), dp(12), dp(20), dp(24));
+        settingsPanel.setBackgroundColor(Color.rgb(25, 32, 42));
         settingsPanel.setClickable(true);
         settingsPanel.setVisibility(View.GONE);
         settingsScroll = new ScrollView(this);
+        settingsScroll.setBackground(rounded(Color.rgb(25, 32, 42), 16, false));
+        settingsScroll.setClipToOutline(true);
         settingsScroll.addView(settingsPanel);
         settingsScroll.setVisibility(View.GONE);
         root.addView(settingsScroll, settingsPanelParams());
@@ -1257,7 +1340,7 @@ public class MainActivity extends Activity {
         feedbackText.setMinWidth(dp(118));
         feedbackText.setMinHeight(dp(86));
         feedbackText.setPadding(dp(22), dp(12), dp(22), dp(14));
-        feedbackText.setBackgroundColor(Color.argb(170, 0, 0, 0));
+        feedbackText.setBackground(rounded(OVERLAY, 18, false));
         feedbackText.setVisibility(View.GONE);
         root.addView(feedbackText, feedbackParams(Gravity.CENTER));
 
@@ -1301,10 +1384,18 @@ public class MainActivity extends Activity {
 
     private void buildSettingsPanel() {
         settingsPanel.removeAllViews();
-        TextView title = text("Playback", 20, Color.WHITE, true);
-        settingsPanel.addView(title);
-        Button closeSettings = overlayButton("Close settings"); closeSettings.setOnClickListener(v -> setSettingsPanelVisible(false)); settingsPanel.addView(closeSettings,fullButtonParams());
-        settingsPanel.addView(text(activeOffline ? "Only this saved copy" : "Applies to viewers connected to this PC",14,Color.LTGRAY,false));
+        LinearLayout heading = new LinearLayout(this);
+        heading.setGravity(Gravity.CENTER_VERTICAL);
+        heading.addView(text("Playback", 24, Color.WHITE, true), new LinearLayout.LayoutParams(0, -2, 1));
+        Button closeSettings = overlayButton("Close");
+        closeSettings.setContentDescription("Close settings");
+        closeSettings.setBackground(buttonBackground(Color.TRANSPARENT, false));
+        closeSettings.setOnClickListener(v -> setSettingsPanelVisible(false));
+        heading.addView(closeSettings, new LinearLayout.LayoutParams(-2, -2));
+        settingsPanel.addView(heading);
+        TextView scope = text(activeOffline ? "Only this saved copy" : "Applies to viewers connected to this PC",13,Color.rgb(181,193,209),false);
+        scope.setPadding(0, 0, 0, dp(16));
+        settingsPanel.addView(scope);
         Button order = overlayButton("Order: " + ("name".equals(playbackOrder)?"File name":"date".equals(playbackOrder)?"Date modified":"Shuffle"));
         order.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Photo order").setItems(new String[]{"Shuffle","File name (A–Z)","Date modified (oldest first)"},(dialog,which)-> {
             savePlayback(); playbackOrder = new String[]{"shuffle","name","date"}[which];
@@ -2000,8 +2091,10 @@ public class MainActivity extends Activity {
         }
 
         boolean full = "full".equals(imageMode);
-        fitButton.setBackgroundColor(full ? Color.argb(120, 0, 0, 0) : ACCENT);
-        fullButton.setBackgroundColor(full ? ACCENT : Color.argb(120, 0, 0, 0));
+        fitButton.setBackground(buttonBackground(full ? OVERLAY : ACCENT, true));
+        fullButton.setBackground(buttonBackground(full ? ACCENT : OVERLAY, true));
+        fitButton.setSelected(!full);
+        fullButton.setSelected(full);
     }
 
     private void updateSettingsText() {
@@ -2178,7 +2271,7 @@ public class MainActivity extends Activity {
         view.setTextColor(color);
         view.setIncludeFontPadding(true);
         if (bold) {
-            view.setTypeface(view.getTypeface(), 1);
+            view.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         }
         return view;
     }
@@ -2188,9 +2281,13 @@ public class MainActivity extends Activity {
         button.setText(value);
         button.setAllCaps(false);
         button.setTextSize(15);
+        button.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         button.setTextColor(primary ? Color.WHITE : INK);
-        button.setBackgroundColor(primary ? ACCENT : Color.WHITE);
+        button.setBackground(buttonBackground(primary ? ACCENT : Color.WHITE, !primary));
+        button.setPadding(dp(16), dp(10), dp(16), dp(10));
         button.setMinHeight(dp(48));
+        button.setMinimumWidth(0);
+        button.setStateListAnimator(null);
         return button;
     }
 
@@ -2199,17 +2296,33 @@ public class MainActivity extends Activity {
         button.setText(value);
         button.setAllCaps(false);
         button.setTextSize(14);
+        button.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         button.setTextColor(Color.WHITE);
-        button.setBackgroundColor(Color.argb(120, 0, 0, 0));
+        button.setBackground(buttonBackground(OVERLAY, true));
+        button.setPadding(dp(8), dp(10), dp(8), dp(10));
         button.setMinHeight(dp(48));
+        button.setMinimumWidth(0);
+        button.setStateListAnimator(null);
         return button;
+    }
+
+    private GradientDrawable rounded(int color, int radius, boolean border) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(dp(radius));
+        if (border) drawable.setStroke(dp(1), color == Color.WHITE ? LINE : Color.argb(35, 255, 255, 255));
+        return drawable;
+    }
+
+    private RippleDrawable buttonBackground(int color, boolean border) {
+        return new RippleDrawable(ColorStateList.valueOf(Color.argb(35, 133, 153, 179)), rounded(color, 8, border), rounded(Color.WHITE, 8, false));
     }
 
     private LinearLayout card() {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
         row.setPadding(dp(16), dp(16), dp(16), dp(16));
-        row.setBackgroundColor(Color.WHITE);
+        row.setBackground(rounded(Color.WHITE, 12, true));
         return row;
     }
 
@@ -2218,13 +2331,14 @@ public class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(12), dp(8), dp(12), dp(8));
-        row.setBackgroundColor(Color.argb(120, 0, 0, 0));
+        row.setBackground(rounded(OVERLAY, 8, false));
+        row.setMinimumHeight(dp(48));
         return row;
     }
 
     private LinearLayout.LayoutParams cardParams() {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-        params.setMargins(0, dp(16), 0, 0);
+        params.setMargins(0, dp(12), 0, 0);
         return params;
     }
 
@@ -2263,6 +2377,7 @@ public class MainActivity extends Activity {
     private FrameLayout.LayoutParams settingsPanelParams() {
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, Math.round(getResources().getDisplayMetrics().heightPixels * .8f));
         params.gravity = Gravity.BOTTOM;
+        params.setMargins(dp(10), 0, dp(10), dp(10));
         return params;
     }
 

@@ -1,13 +1,13 @@
-const CACHE_NAME = "slide-show-shell-20260922-workflows";
+const CACHE_NAME = "slide-show-shell-20260922-gallery";
 const SHELL_URLS = [
   "/show",
   "/manifest.webmanifest",
-  "/assets/playback-state.js?v=20260922-workflows",
-  "/assets/slideshow.css?v=20260922-workflows",
-  "/assets/slideshow.js?v=20260922-workflows",
-  "/assets/offline-crypto.js?v=20260922-workflows",
-  "/assets/offline-store.js?v=20260922-workflows",
-  "/assets/offline-sync.js?v=20260922-workflows",
+  "/assets/playback-state.js?v=20260922-gallery",
+  "/assets/slideshow.css?v=20260922-gallery",
+  "/assets/slideshow.js?v=20260922-gallery",
+  "/assets/offline-crypto.js?v=20260922-gallery",
+  "/assets/offline-store.js?v=20260922-gallery",
+  "/assets/offline-sync.js?v=20260922-gallery",
   "/assets/darkroom-stage.png"
 ];
 

@@ -1,4 +1,4 @@
-import { listCatalogs } from "./offline-store.js?v=20260922-workflows";
+import { listCatalogs } from "./offline-store.js?v=20260922-gallery";
 const $ = (id) => document.getElementById(id);
 const settingNames = [
   "slideSeconds",
@@ -75,6 +75,8 @@ function pending() {
   $("saveSettings").disabled = busy || !dirty();
   $("discardSettings").hidden = !dirty();
   $("saveStatus").textContent = dirty() ? "Unsaved changes" : "";
+  const draft = values();
+  $("playbackSummary").textContent = `${draft.slideSeconds || 7} sec · ${draft.imageMode === "full" ? "Fill screen" : "Entire photo"} · ${{ shuffle: "Shuffle", name: "File name", date: "Date" }[draft.playbackOrder] || "Shuffle"}`;
 }
 function date(value) {
   return value
@@ -105,14 +107,15 @@ function render(state, saved = false) {
   applyValues(draft || baseline);
   pending();
   $("statusPill").textContent = "Connected";
+  $("statusPill").classList.add("is-connected");
   $("connectionError").hidden = true;
   $("currentSlideshowName").textContent =
     state.folderName || folderName(state.folderPath) || "Choose your photos";
   $("currentFolderDetail").textContent = state.folderPath
     ? state.imageCount
-      ? "Ready to watch here or on another device."
-      : "Choose a folder containing supported photos."
-    : "Choose a folder on this PC to start a slideshow.";
+      ? "On this PC"
+      : "No supported photos"
+    : "No folder selected";
   $("folderPath").textContent = state.folderPath || "";
   $("imageCount").textContent = (state.imageCount || 0).toLocaleString();
   $("lastScan").textContent = date(state.lastScannedAt);
@@ -186,6 +189,13 @@ async function renderLibraries(state) {
   if (signature === librarySignature) return;
   librarySignature = signature;
   $("libraryList").replaceChildren();
+  $("libraryCount").textContent = recent.length + catalogs.length || "";
+  const group = (label) => {
+    const heading = document.createElement("p");
+    heading.className = "library-group";
+    heading.textContent = label;
+    $("libraryList").append(heading);
+  };
   const row = (name, meta, label, action, current = false) => {
     const element = document.createElement("article");
     element.className = "library-row" + (current ? " is-current" : "");
@@ -193,15 +203,30 @@ async function renderLibraries(state) {
       title = document.createElement("h3"),
       description = document.createElement("p"),
       button = document.createElement("button");
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg"),
+      use = document.createElementNS("http://www.w3.org/2000/svg", "use"),
+      arrow = document.createElement("span");
+    icon.setAttribute("class", "icon");
+    icon.setAttribute("aria-hidden", "true");
+    use.setAttribute("href", label === "Play saved" ? "#icon-photo" : "#icon-folder");
+    icon.append(use);
     title.textContent = name;
-    description.textContent = meta;
-    button.textContent = label;
+    description.textContent = meta.replace(/^On this PC · /, "").replace(/^Saved in this browser · /, "");
+    description.title = meta;
+    arrow.className = "library-arrow";
+    arrow.textContent = current ? "✓" : "›";
+    arrow.setAttribute("aria-hidden", "true");
+    button.className = "library-item";
+    button.setAttribute("aria-label", `${label} ${name}`);
+    if (current) button.setAttribute("aria-current", "true");
     button.type = "button";
     button.onclick = () => run(button, action);
     details.append(title, description);
-    element.append(details, button);
+    button.append(icon, details, arrow);
+    element.append(button);
     $("libraryList").append(element);
   };
+  if (recent.length) group("On this PC");
   for (const item of recent)
     row(
       item.folderName || folderName(item.folderPath),
@@ -215,6 +240,7 @@ async function renderLibraries(state) {
       },
       item.folderPath?.toLowerCase() === state.folderPath?.toLowerCase(),
     );
+  if (catalogs.length) group("Saved in this browser");
   for (const catalog of catalogs)
     row(
       catalog.displayName || "Saved slideshow",
@@ -227,7 +253,7 @@ async function renderLibraries(state) {
     const empty = document.createElement("p");
     empty.className = "library-empty";
     empty.textContent =
-      "Choose photos above. Your folders and saved copies will appear here.";
+      "Choose a folder to add your first collection.";
     $("libraryList").append(empty);
   }
 }
@@ -238,6 +264,7 @@ async function refresh() {
     render(await api("/api/state"));
   } catch {
     $("statusPill").textContent = "Disconnected";
+    $("statusPill").classList.remove("is-connected");
     $("connectionError").hidden = false;
   } finally {
     refreshing = false;

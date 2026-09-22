@@ -1,4 +1,4 @@
-import { arrangePhotos, photoKey } from "./playback-state.js?v=20260922-workflows";
+import { arrangePhotos, photoKey } from "./playback-state.js?v=20260922-gallery";
 import {
   PIN_ITERATIONS,
   bytesToBase64,
@@ -10,7 +10,7 @@ import {
   isCryptoAvailable,
   randomBytes,
   verifyPinKey
-} from "./offline-crypto.js?v=20260922-workflows";
+} from "./offline-crypto.js?v=20260922-gallery";
 import {
   deleteCatalog,
   estimateStorage,
@@ -21,8 +21,8 @@ import {
   makeServerKey,
   saveCatalogBundle,
   updateCatalog
-} from "./offline-store.js?v=20260922-workflows";
-import { getSyncPlan, syncCatalog } from "./offline-sync.js?v=20260922-workflows";
+} from "./offline-store.js?v=20260922-gallery";
+import { getSyncPlan, syncCatalog } from "./offline-sync.js?v=20260922-gallery";
 
 const stage = document.querySelector("#stage");
 let image = document.querySelector("#slideImage");
