@@ -212,6 +212,10 @@ final class OfflineImageStore {
     }
 
     OfflineCatalog sync(int slotId, String serverKey, String serverName, String baseUrl, JSONObject state, JSONArray imageList, int syncWorkers, ProgressListener listener, AtomicBoolean canceled) throws Exception {
+        return sync(slotId, serverKey, serverName, baseUrl, state, imageList, syncWorkers, listener, canceled, "");
+    }
+
+    OfflineCatalog sync(int slotId, String serverKey, String serverName, String baseUrl, JSONObject state, JSONArray imageList, int syncWorkers, ProgressListener listener, AtomicBoolean canceled, String pin) throws Exception {
         if (!isValidSlot(slotId)) {
             throw new IllegalArgumentException("Invalid offline slot.");
         }
@@ -232,20 +236,7 @@ final class OfflineImageStore {
         long required = 0;
         for (int i=0; i<imageList.length(); i++) required += imageList.getJSONObject(i).optLong("sizeBytes",0) + 64;
         if (required > new StatFs(rootDirectory.getAbsolutePath()).getAvailableBytes()) throw new IllegalStateException("Not enough storage. Free space or choose a smaller folder. Existing saved photos are unchanged.");
-        checkCanceled(canceled);
-        AtomicInteger completedCount = new AtomicInteger();
-        int workerCount = normalizeSyncWorkers(syncWorkers);
-        try {
-            downloadImages(slotId, baseUrl, nextImages, workerCount, listener, completedCount, canceled);
-            checkCanceled(canceled);
-        } catch (Exception error) {
-            Set<String> retained = new HashSet<>();
-            if (existing != null) for (MainActivity.SlideImage image : existing.images) retained.add(image.encryptedFileName);
-            for (MainActivity.SlideImage image : nextImages) if (!retained.contains(image.encryptedFileName)) imageFile(slotId, image).delete();
-            throw error;
-        }
-
-        boolean preserveProtection = existing != null && (folderIdentity.equals(existing.folderIdentity) || legacyFolderIdentity.equals(existing.folderIdentity));
+        boolean preserveProtection = hasMatchingPin(existing, folderIdentity, legacyFolderIdentity);
         OfflineCatalog catalog = new OfflineCatalog(
             slotId,
             serverKey,
@@ -263,6 +254,20 @@ final class OfflineImageStore {
             preserveProtection ? existing.pinSalt : "",
             preserveProtection ? existing.pinHash : "",
             nextImages);
+        if (!cleanPin(pin).isEmpty()) catalog = withCatalogPin(catalog, pin);
+
+        checkCanceled(canceled);
+        AtomicInteger completedCount = new AtomicInteger();
+        int workerCount = normalizeSyncWorkers(syncWorkers);
+        try {
+            downloadImages(slotId, baseUrl, nextImages, workerCount, listener, completedCount, canceled);
+            checkCanceled(canceled);
+        } catch (Exception error) {
+            Set<String> retained = new HashSet<>();
+            if (existing != null) for (MainActivity.SlideImage image : existing.images) retained.add(image.encryptedFileName);
+            for (MainActivity.SlideImage image : nextImages) if (!retained.contains(image.encryptedFileName)) imageFile(slotId, image).delete();
+            throw error;
+        }
 
         catalog.playbackOrder = state.optString("playbackOrder", "shuffle");
         catalog.collectionId = state.optString("collectionId", "");
@@ -382,6 +387,15 @@ final class OfflineImageStore {
             return;
         }
 
+        writeCatalog(withCatalogPin(catalog, pin));
+    }
+
+    static boolean hasMatchingPin(OfflineCatalog catalog, String folderIdentity, String legacyFolderIdentity) {
+        return catalog != null && catalog.hasPin()
+            && (folderIdentity.equals(catalog.folderIdentity) || legacyFolderIdentity.equals(catalog.folderIdentity));
+    }
+
+    private static OfflineCatalog withCatalogPin(OfflineCatalog catalog, String pin) throws Exception {
         String cleanPin = cleanPin(pin);
         if (cleanPin.length() < 4) {
             throw new IllegalArgumentException("PIN must be at least 4 digits.");
@@ -389,9 +403,9 @@ final class OfflineImageStore {
 
         byte[] salt = new byte[PIN_SALT_BYTES];
         new SecureRandom().nextBytes(salt);
-        writeCatalog(catalog.withPin(
+        return catalog.withPin(
             Base64.encodeToString(salt, Base64.NO_WRAP),
-            Base64.encodeToString(hashPin(cleanPin, salt), Base64.NO_WRAP)));
+            Base64.encodeToString(hashPin(cleanPin, salt), Base64.NO_WRAP));
     }
 
     void clearCatalogPin(int slotId) throws Exception {

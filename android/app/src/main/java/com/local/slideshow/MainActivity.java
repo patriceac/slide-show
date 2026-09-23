@@ -279,18 +279,18 @@ public class MainActivity extends Activity {
     }
 
     @Override
-    protected void onStop() {
+    protected void onPause() {
         activityVisible = false;
         savePlayback();
         handler.removeCallbacks(advanceRunnable);
+        unlockedCatalogSlots.clear();
         if (activeCatalog != null && activeCatalog.hasPin()) {
-            unlockedCatalogSlots.remove(activeCatalog.slotId);
             protectedSlideshowPaused = showingSlideshow;
             lockActiveSlideshow();
         }
         stopViewerHeartbeat();
         stopServerFolderWatch();
-        super.onStop();
+        super.onPause();
     }
 
     @Override
@@ -994,6 +994,18 @@ public class MainActivity extends Activity {
     private void syncToSlot(ServerInfo info, JSONObject state, JSONArray imageList, int syncWorkers, int slotId, boolean keepCurrentOnFailure) {
         if (syncInProgress) return;
         if (imageList.length() == 0) { showTapFeedback("No photos to save", Gravity.CENTER); return; }
+        OfflineImageStore.OfflineCatalog existing = offlineStore.loadCatalog(slotId);
+        if (OfflineImageStore.hasMatchingPin(existing, OfflineImageStore.folderIdentityFor(info.key(), state),
+                info.key() + "\n" + state.optString("folderName", "Slide Show"))) {
+            saveToSlot(info, state, imageList, syncWorkers, slotId, "");
+        } else {
+            showPinDialog("Save offline", true, pin -> saveToSlot(info, state, imageList, syncWorkers, slotId, pin));
+        }
+    }
+
+    private void saveToSlot(ServerInfo info, JSONObject state, JSONArray imageList, int syncWorkers, int slotId, String pin) {
+        if (syncInProgress) return;
+        if (imageList.length() == 0) { showTapFeedback("No photos to save", Gravity.CENTER); return; }
         syncInProgress = true;
         java.util.concurrent.atomic.AtomicBoolean canceled = new java.util.concurrent.atomic.AtomicBoolean();
         long startedAt = SystemClock.elapsedRealtime();
@@ -1011,9 +1023,10 @@ public class MainActivity extends Activity {
         executor.execute(() -> {
             try {
                 OfflineImageStore.OfflineCatalog saved = offlineStore.sync(slotId, info.key(), info.name, info.baseUrl(), state, imageList, syncWorkers,
-                    (completed,total,name) -> handler.post(() -> { if (!canceled.get()) progress.setMessage(completed + " / " + total + " photos" + expectedSize + etaText(completed,total,startedAt)); }), canceled);
+                    (completed,total,name) -> handler.post(() -> { if (!canceled.get()) progress.setMessage(completed + " / " + total + " photos" + expectedSize + etaText(completed,total,startedAt)); }), canceled, pin);
                 handler.post(() -> {
                     progress.dismiss();
+                    if (!pin.isEmpty()) unlockedCatalogSlots.remove(slotId);
                     if (showingSlideshow && activeCatalog == selected) {
                         if (activeOffline) openOfflineCatalog(saved);
                         else { restoreActiveHeader(); showTapFeedback("Saved on this device", Gravity.CENTER); buildSettingsPanel(); }
@@ -1291,12 +1304,25 @@ public class MainActivity extends Activity {
     }
 
     private void showSetPinDialog(OfflineImageStore.OfflineCatalog catalog) {
+        showPinDialog(catalog.hasPin() ? "Change PIN" : "Set PIN", false, pin -> {
+            offlineStore.setCatalogPin(catalog.slotId, pin);
+            unlockedCatalogSlots.add(catalog.slotId);
+            activeCatalog = activeCatalog != null && activeCatalog.slotId == catalog.slotId
+                ? reloadCatalog(catalog) : activeCatalog;
+            if (settingsPanel != null) buildSettingsPanel();
+            if (discoveryList != null) renderOfflineOptions(offlineStore.loadCatalogs());
+        });
+    }
+
+    private interface PinAction { void save(String pin) throws Exception; }
+
+    private void showPinDialog(String title, boolean optional, PinAction action) {
         LinearLayout form = new LinearLayout(this);
         form.setOrientation(LinearLayout.VERTICAL);
         form.setPadding(dp(4), 0, dp(4), 0);
 
         EditText pin = pinInput();
-        pin.setHint("PIN");
+        pin.setHint(optional ? "PIN (optional)" : "PIN");
         form.addView(pin);
 
         EditText confirm = pinInput();
@@ -1304,8 +1330,10 @@ public class MainActivity extends Activity {
         form.addView(confirm);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
-            .setTitle(catalog.hasPin() ? "Change PIN" : "Set PIN")
-            .setMessage("Use at least 4 digits.")
+            .setTitle(title)
+            .setMessage(optional
+                ? "Photos are always encrypted on this phone. Add a PIN of at least 4 digits to lock playback, or leave both fields blank."
+                : "Use at least 4 digits.")
             .setView(form)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Save", null)
@@ -1316,7 +1344,7 @@ public class MainActivity extends Activity {
             focusPinInput(dialog, pin);
             save.setOnClickListener(v -> {
                 String nextPin = pin.getText().toString().trim();
-                if (nextPin.length() < 4) {
+                if ((!optional || !nextPin.isEmpty()) && nextPin.length() < 4) {
                     pin.setError("Use at least 4 digits");
                     return;
                 }
@@ -1326,18 +1354,8 @@ public class MainActivity extends Activity {
                 }
 
                 try {
-                    offlineStore.setCatalogPin(catalog.slotId, nextPin);
-                    unlockedCatalogSlots.add(catalog.slotId);
-                    activeCatalog = activeCatalog != null && activeCatalog.slotId == catalog.slotId
-                        ? reloadCatalog(catalog)
-                        : activeCatalog;
+                    action.save(nextPin);
                     dialog.dismiss();
-                    if (settingsPanel != null) {
-                        buildSettingsPanel();
-                    }
-                    if (discoveryList != null) {
-                        renderOfflineOptions(offlineStore.loadCatalogs());
-                    }
                 } catch (Exception ignored) {
                     pin.setError("Could not save PIN");
                 }

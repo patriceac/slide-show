@@ -16,6 +16,8 @@ Existing recent folders migrate to named collections. The previously selected fo
 
 Offline downloads show progress and can be canceled. A failed or canceled replacement preserves the previous copy. Android keeps up to four saved libraries. Browser saving requires HTTPS or localhost and available browser storage. Browser copies belong to the browser and address where they were saved.
 
+**Save offline** offers an optional PIN before downloading. Leave both PIN fields blank to save without a playback lock; photos are encrypted on the device either way. Updating a protected copy keeps its PIN; replacing it with another collection offers a new PIN choice.
+
 Closing the control tab keeps the Windows server running in the system tray. Start at login is optional. JPG, PNG, WebP, GIF, BMP, AVIF and SVG are served by the PC; native Android format support depends on its OS. Convert HEIC/HEIF first.
 
 ## Build
