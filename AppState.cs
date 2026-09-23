@@ -9,6 +9,7 @@ public sealed class AppState
     private readonly object _gate = new();
     private readonly SettingsStore _settingsStore;
     private readonly ImageCatalog _catalog = new();
+    private readonly Dictionary<string, ImageCatalog> _collectionCatalogs = new();
     private readonly ViewerActivityTracker _viewerActivity;
     private AppSettings _settings;
 
@@ -17,7 +18,8 @@ public sealed class AppState
         _settingsStore = settingsStore;
         _viewerActivity = viewerActivity;
         _settings = settingsStore.Load();
-        if (RememberCurrentSlideshow(_settings))
+        _settings.Normalize();
+        if (RememberCurrentSlideshow(_settings) || _settings.Collections.Count > 0)
         {
             _settingsStore.Save(_settings);
         }
@@ -47,20 +49,28 @@ public sealed class AppState
 
     public bool HttpsEnabled { get; private set; }
 
-    public AppSettings GetSettings()
+    public AppSettings GetSettings(string? collectionId = null)
     {
         lock (_gate)
         {
-            return _settings.Copy();
+            var settings = _settings.Copy();
+            var collection = FindCollection(collectionId);
+            if (collectionId is not null && collection is null) throw new KeyNotFoundException("Collection not found.");
+            collection?.ApplyTo(settings);
+            return settings;
         }
     }
 
-    public StateDto GetSnapshot(bool canConfigure)
+    public StateDto GetSnapshot(bool canConfigure, string? collectionId = null)
     {
         AppSettings settings;
+        PhotoCollection? collection;
+        ImageCatalog catalog;
         lock (_gate)
         {
-            settings = _settings.Copy();
+            settings = GetSettings(collectionId);
+            collection = FindCollection(collectionId)?.Copy();
+            catalog = CatalogFor(collectionId);
         }
 
         var localUrl = $"http://localhost:{settings.Port}";
@@ -73,10 +83,11 @@ public sealed class AppState
             .ToArray();
         var displayUrl = lanUrls.FirstOrDefault() ?? localUrl;
         var httpsDisplayUrl = httpsLanUrls.FirstOrDefault() ?? localHttpsUrl;
+        var showPath = collection is null ? "/show" : $"/show?collection={Uri.EscapeDataString(collection.Id)}";
 
         return new StateDto(
             settings.FolderPath,
-            settings.FolderPath is null ? null : Path.GetFileName(settings.FolderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)),
+            collection?.Name ?? (settings.FolderPath is null ? null : RecentSlideshow.DisplayNameFor(settings.FolderPath)),
             settings.IncludeSubfolders,
             settings.SlideSeconds,
             settings.BackgroundColor,
@@ -85,54 +96,136 @@ public sealed class AppState
             settings.Port,
             settings.HttpsPort,
             settings.StartAtLogin,
-            _catalog.Count,
-            _catalog.Version,
-            _catalog.LastScannedAt,
-            _catalog.ScanMessage,
+            catalog.Count,
+            catalog.Version,
+            catalog.LastScannedAt,
+            catalog.ScanMessage,
             canConfigure,
             HttpsEnabled,
             localUrl,
-            $"{localUrl}/show",
+            $"{localUrl}{showPath}",
             displayUrl,
-            $"{displayUrl}/show",
-            lanUrls.Select(url => $"{url}/show").ToArray(),
+            $"{displayUrl}{showPath}",
+            lanUrls.Select(url => $"{url}{showPath}").ToArray(),
             localHttpsUrl,
-            $"{localHttpsUrl}/show",
+            $"{localHttpsUrl}{showPath}",
             httpsDisplayUrl,
-            $"{httpsDisplayUrl}/show",
-            httpsLanUrls.Select(url => $"{url}/show").ToArray(),
+            $"{httpsDisplayUrl}{showPath}",
+            httpsLanUrls.Select(url => $"{url}{showPath}").ToArray(),
             $"{displayUrl}/certificate.cer",
             $"{httpsDisplayUrl}/certificate.cer",
-            settings.RecentSlideshows.Select(ToDto).ToArray(),
+            canConfigure ? settings.RecentSlideshows.Select(ToDto).ToArray() : [],
             settings.PlaybackOrder,
             Environment.MachineName,
-            _viewerActivity.RemoteViewerCount);
+            _viewerActivity.RemoteViewerCount,
+            collection?.Id,
+            collection?.Shared ?? false,
+            GetCollections(canConfigure));
     }
 
-    public IReadOnlyList<ImageDto> GetImages(bool shuffle)
+    public IReadOnlyList<ImageDto> GetImages(bool shuffle, string? collectionId = null)
     {
-        return _catalog.GetImages(shuffle)
-            .Select(image => new ImageDto(image.Id, image.Name, $"/image/{image.Id}?v={_catalog.Version}", ImageCatalog.GetCacheKey(image), image.SizeBytes, image.ModifiedAt.ToUnixTimeMilliseconds()))
-            .ToArray();
+        lock (_gate)
+        {
+            var catalog = CatalogFor(collectionId);
+            var id = FindCollection(collectionId)?.Id;
+            return catalog.GetImages(shuffle)
+                .Select(image => new ImageDto(image.Id, image.Name, $"/image/{image.Id}?v={catalog.Version}&collection={id}", ImageCatalog.GetCacheKey(image), image.SizeBytes, image.ModifiedAt.ToUnixTimeMilliseconds()))
+                .ToArray();
+        }
     }
 
-    public ImageItem? GetImage(int id) => _catalog.GetById(id);
+    public ImageItem? GetImage(int id, string? collectionId = null)
+    {
+        lock (_gate) { return CatalogFor(collectionId).GetById(id); }
+    }
 
     public void RecordViewer(string viewerKey, bool isLocal) => _viewerActivity.Record(viewerKey, isLocal);
 
     public void ClearRemoteViewer(string viewerKey) => _viewerActivity.Clear(viewerKey);
 
-    public void Rescan()
+    public void Rescan(string? collectionId = null)
     {
-        lock (_gate) { _catalog.Scan(_settings.Copy()); }
+        lock (_gate) { CatalogFor(collectionId).Scan(GetSettings(collectionId)); }
     }
 
-    public void RefreshCatalog()
+    public void RefreshCatalog(string? collectionId = null)
     {
         lock (_gate)
         {
-            if (_catalog.LastScannedAt is null || DateTimeOffset.Now - _catalog.LastScannedAt >= TimeSpan.FromSeconds(5))
-                _catalog.Scan(_settings.Copy());
+            var catalog = CatalogFor(collectionId);
+            if (catalog.LastScannedAt is null || DateTimeOffset.Now - catalog.LastScannedAt >= TimeSpan.FromSeconds(5))
+                catalog.Scan(GetSettings(collectionId));
+        }
+    }
+
+    private PhotoCollection? FindCollection(string? id) => id is not null
+        ? _settings.Collections.FirstOrDefault(item => item.Id == id)
+        : _settings.Collections.FirstOrDefault(item => string.Equals(item.FolderPath, _settings.FolderPath, StringComparison.OrdinalIgnoreCase));
+
+    private ImageCatalog CatalogFor(string? id)
+    {
+        var collection = FindCollection(id);
+        if (collection is null)
+        {
+            if (id is not null) throw new KeyNotFoundException("Collection not found.");
+            return _catalog;
+        }
+        if (!_collectionCatalogs.TryGetValue(collection.Id, out var catalog))
+            _collectionCatalogs[collection.Id] = catalog = new ImageCatalog();
+        return catalog;
+    }
+
+    public bool CanAccessCollection(string? id, bool local)
+    {
+        lock (_gate)
+        {
+            var collection = FindCollection(id);
+            return collection is null ? local && id is null : local || collection.Shared;
+        }
+    }
+
+    public CollectionDto[] GetCollections(bool local)
+    {
+        lock (_gate)
+        {
+            return _settings.Collections.Where(item => local || item.Shared).Select(item =>
+            {
+                RefreshCatalog(item.Id);
+                var catalog = CatalogFor(item.Id);
+                return new CollectionDto(item.Id, item.Name, catalog.Count, item.Shared,
+                    catalog.Count > 0 ? $"/image/0?collection={item.Id}&v={catalog.Version}" : null,
+                    local ? item.FolderPath : null, Directory.Exists(item.FolderPath));
+            }).ToArray();
+        }
+    }
+
+    public bool UpdateCollection(string id, CollectionUpdateDto update)
+    {
+        lock (_gate)
+        {
+            var collection = FindCollection(id);
+            if (collection is null) return false;
+            if (!string.IsNullOrWhiteSpace(update.Name)) collection.Name = update.Name.Trim();
+            if (update.Shared.HasValue) collection.Shared = update.Shared.Value;
+            _settingsStore.Save(_settings);
+            return true;
+        }
+    }
+
+    public bool RemoveCollection(string id)
+    {
+        lock (_gate)
+        {
+            var collection = FindCollection(id);
+            if (collection is null) return false;
+            _settings.Collections.Remove(collection);
+            _settings.RecentSlideshows.RemoveAll(item => string.Equals(item.FolderPath, collection.FolderPath, StringComparison.OrdinalIgnoreCase));
+            _collectionCatalogs.Remove(id);
+            if (string.Equals(_settings.FolderPath, collection.FolderPath, StringComparison.OrdinalIgnoreCase))
+                _settings.FolderPath = _settings.Collections.FirstOrDefault()?.FolderPath;
+            _settingsStore.Save(_settings);
+            return true;
         }
     }
 
@@ -151,82 +244,53 @@ public sealed class AppState
         }
     }
 
-    public void UpdateSettings(SettingsUpdateDto update)
+    public void UpdateSettings(SettingsUpdateDto update, string? collectionId = null)
     {
         lock (_gate)
         {
-            var rescan = (update.FolderPath is not null && !string.Equals(update.FolderPath.Trim(), _settings.FolderPath, StringComparison.OrdinalIgnoreCase))
-                || (update.IncludeSubfolders.HasValue && update.IncludeSubfolders != _settings.IncludeSubfolders);
+            var rescan = false;
             if (update.FolderPath is not null)
             {
                 _settings.FolderPath = string.IsNullOrWhiteSpace(update.FolderPath) ? null : update.FolderPath.Trim();
-            }
-
-            if (update.IncludeSubfolders.HasValue)
-            {
-                _settings.IncludeSubfolders = update.IncludeSubfolders.Value;
-            }
-
-            if (update.SlideSeconds.HasValue)
-            {
-                _settings.SlideSeconds = update.SlideSeconds.Value;
-            }
-
-            if (update.BackgroundColor is not null)
-            {
-                _settings.BackgroundColor = update.BackgroundColor;
-            }
-
-            if (update.ImageMode is not null)
-            {
-                _settings.ImageMode = update.ImageMode;
-            }
-            if (update.PlaybackOrder is not null) { _settings.PlaybackOrder = update.PlaybackOrder; }
-
-            if (update.SyncWorkers.HasValue)
-            {
-                _settings.SyncWorkers = update.SyncWorkers.Value;
-            }
-
-            if (update.StartAtLogin.HasValue)
-            {
-                _settings.StartAtLogin = update.StartAtLogin.Value;
-            }
-
-            _settings.Normalize();
-            if (update.FolderPath is not null)
-            {
+                if (_settings.FolderPath is not null && FindCollection(null) is null)
+                {
+                    var added = new PhotoCollection { FolderPath = _settings.FolderPath,
+                        Name = RecentSlideshow.DisplayNameFor(_settings.FolderPath) };
+                    added.ReadPlayback(_settings);
+                    _settings.Collections.Add(added);
+                }
+                collectionId = FindCollection(null)?.Id;
                 RememberCurrentSlideshow(_settings);
+                rescan = true;
             }
+            var effective = GetSettings(collectionId);
+            var collection = FindCollection(collectionId);
+            rescan |= update.IncludeSubfolders.HasValue && update.IncludeSubfolders != effective.IncludeSubfolders;
+            if (update.IncludeSubfolders.HasValue) effective.IncludeSubfolders = update.IncludeSubfolders.Value;
+            if (update.SlideSeconds.HasValue) effective.SlideSeconds = update.SlideSeconds.Value;
+            if (update.BackgroundColor is not null) effective.BackgroundColor = update.BackgroundColor;
+            if (update.ImageMode is not null) effective.ImageMode = update.ImageMode;
+            if (update.PlaybackOrder is not null) effective.PlaybackOrder = update.PlaybackOrder;
+            effective.Normalize();
+            collection?.ReadPlayback(effective);
+            if (collection is null || string.Equals(collection.FolderPath, _settings.FolderPath, StringComparison.OrdinalIgnoreCase))
+            {
+                _settings.IncludeSubfolders = effective.IncludeSubfolders;
+                _settings.SlideSeconds = effective.SlideSeconds;
+                _settings.BackgroundColor = effective.BackgroundColor;
+                _settings.ImageMode = effective.ImageMode;
+                _settings.PlaybackOrder = effective.PlaybackOrder;
+            }
+            if (update.SyncWorkers.HasValue) _settings.SyncWorkers = update.SyncWorkers.Value;
+            if (update.StartAtLogin.HasValue) _settings.StartAtLogin = update.StartAtLogin.Value;
             _settingsStore.Save(_settings);
-            if (rescan) { _catalog.Scan(_settings.Copy()); }
+            if (rescan) CatalogFor(collectionId).Scan(effective);
         }
     }
 
-    public void UpdatePlaybackSettings(PlaybackSettingsUpdateDto update)
-    {
-        lock (_gate)
-        {
-            if (update.SlideSeconds.HasValue)
-            {
-                _settings.SlideSeconds = update.SlideSeconds.Value;
-            }
-
-            if (update.BackgroundColor is not null)
-            {
-                _settings.BackgroundColor = update.BackgroundColor;
-            }
-
-            if (update.ImageMode is not null)
-            {
-                _settings.ImageMode = update.ImageMode;
-            }
-            if (update.PlaybackOrder is not null) { _settings.PlaybackOrder = update.PlaybackOrder; }
-
-            _settings.Normalize();
-            _settingsStore.Save(_settings);
-        }
-    }
+    public void UpdatePlaybackSettings(PlaybackSettingsUpdateDto update, string? collectionId = null) =>
+        UpdateSettings(new SettingsUpdateDto { SlideSeconds = update.SlideSeconds,
+            BackgroundColor = update.BackgroundColor, ImageMode = update.ImageMode, PlaybackOrder = update.PlaybackOrder }, collectionId);
 
     private static bool RememberCurrentSlideshow(AppSettings settings)
     {
@@ -312,7 +376,18 @@ public sealed record StateDto(
     RecentSlideshowDto[] RecentSlideshows,
     string PlaybackOrder,
     string ComputerName,
-    int ConnectedViewers);
+    int ConnectedViewers,
+    string? CollectionId,
+    bool Shared,
+    CollectionDto[] Collections);
+
+public sealed record CollectionDto(string Id, string Name, int ImageCount, bool Shared, string? PreviewUrl, string? FolderPath, bool Available);
+
+public sealed class CollectionUpdateDto
+{
+    public string? Name { get; set; }
+    public bool? Shared { get; set; }
+}
 
 public sealed record RecentSlideshowDto(string FolderPath, string FolderName, DateTimeOffset LastUsedAt);
 

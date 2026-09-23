@@ -1,4 +1,4 @@
-import { listCatalogs } from "./offline-store.js?v=20260922-gallery";
+import { listCatalogs } from "./offline-store.js?v=20260923-collections";
 const $ = (id) => document.getElementById(id);
 const settingNames = [
   "slideSeconds",
@@ -17,11 +17,16 @@ let currentState,
   toastTimer;
 let busy = false,
   refreshing = false;
+let selectedCollection = new URLSearchParams(location.search).get("collection");
+try { selectedCollection ||= localStorage.getItem("slideshow.selectedCollection"); } catch {}
 
-async function api(path, payload) {
+async function api(path, payload, options = {}) {
+  const url = new URL(path, location.href);
+  if (selectedCollection && ["/api/state", "/api/images", "/api/settings", "/api/rescan"].includes(url.pathname))
+    url.searchParams.set("collection", selectedCollection);
   let response;
   try {
-    response = await fetch(path, {
+    response = await fetch(url, {
       signal: AbortSignal.timeout(15000),
       ...(payload !== undefined
         ? {
@@ -30,11 +35,16 @@ async function api(path, payload) {
             body: JSON.stringify(payload),
           }
         : {}),
+      ...options,
     });
   } catch {
     throw new Error(
       "Cannot reach Slide Show. Check that the app is running, then retry.",
     );
+  }
+  if (response.status === 404 && path === "/api/state" && selectedCollection) {
+    selectedCollection = null;
+    return api(path);
   }
   if (!response.ok)
     throw new Error(
@@ -95,8 +105,10 @@ function folderName(path) {
     .pop();
 }
 function render(state, saved = false) {
-  const draft = !saved && dirty() ? values() : null;
+  const draft = !saved && currentState?.collectionId === state.collectionId && dirty() ? values() : null;
   currentState = state;
+  selectedCollection = state.collectionId || null;
+  try { if (selectedCollection) localStorage.setItem("slideshow.selectedCollection", selectedCollection); else localStorage.removeItem("slideshow.selectedCollection"); } catch {}
   baseline = Object.fromEntries(
     settingNames.map((name) => [
       name,
@@ -106,11 +118,12 @@ function render(state, saved = false) {
   );
   applyValues(draft || baseline);
   pending();
-  $("statusPill").textContent = "Connected";
+  const sharedCount = (state.collections || []).filter(item => item.shared).length;
+  $("statusPill").textContent = `${state.computerName || "This PC"} · ${sharedCount} collection${sharedCount === 1 ? "" : "s"} shared`;
   $("statusPill").classList.add("is-connected");
   $("connectionError").hidden = true;
   $("currentSlideshowName").textContent =
-    state.folderName || folderName(state.folderPath) || "Choose your photos";
+    state.folderName || folderName(state.folderPath) || "Add a collection";
   $("currentFolderDetail").textContent = state.folderPath
     ? state.imageCount
       ? "On this PC"
@@ -123,11 +136,13 @@ function render(state, saved = false) {
   $("scanMessage").hidden = !state.scanMessage;
   $("playCurrent").disabled = !state.imageCount;
   $("playCurrent").classList.toggle("primary-button", Boolean(state.imageCount));
-  $("chooseFolder").classList.toggle("primary-button", !state.imageCount);
-  $("watchDevice").disabled = !state.imageCount;
-  $("chooseFolder").textContent = state.folderPath
-    ? "Change folder"
-    : "Choose photos";
+  $("watchDevice").disabled = !state.collectionId || !state.shared;
+  $("watchDevice").title = state.shared ? "Copy this collection's link" : "Make this collection available to other devices to copy its link";
+  $("collectionShared").checked = Boolean(state.shared);
+  $("collectionShared").disabled = !state.collectionId || !state.canConfigure;
+  $("sharingDetail").textContent = state.shared ? `Shared from ${state.computerName} on this Wi-Fi` : "Only available on this PC";
+  if (document.activeElement !== $("collectionName")) $("collectionName").value = state.folderName || "";
+  $("renameCollection").disabled = $("removeCollection").disabled = !state.collectionId || !state.canConfigure;
   $("chooseFolder").disabled = !state.canConfigure;
   $("rescan").disabled = !state.canConfigure || !state.folderPath;
   $("serverPort").textContent = state.port;
@@ -184,19 +199,19 @@ async function updatePreview(state) {
 async function renderLibraries(state) {
   const catalogs = await listCatalogs().catch(() => []);
   if (state !== currentState) return;
-  const recent = state.recentSlideshows || [],
-    signature = JSON.stringify([recent, catalogs, state.folderPath]);
+  const collections = state.collections || [],
+    signature = JSON.stringify([collections, catalogs, state.collectionId]);
   if (signature === librarySignature) return;
   librarySignature = signature;
   $("libraryList").replaceChildren();
-  $("libraryCount").textContent = recent.length + catalogs.length || "";
+  $("libraryCount").textContent = "";
   const group = (label) => {
     const heading = document.createElement("p");
     heading.className = "library-group";
     heading.textContent = label;
     $("libraryList").append(heading);
   };
-  const row = (name, meta, label, action, current = false) => {
+  const row = (name, meta, label, action, current = false, previewUrl = null) => {
     const element = document.createElement("article");
     element.className = "library-row" + (current ? " is-current" : "");
     const details = document.createElement("div"),
@@ -222,23 +237,32 @@ async function renderLibraries(state) {
     button.type = "button";
     button.onclick = () => run(button, action);
     details.append(title, description);
-    button.append(icon, details, arrow);
+    if (previewUrl) {
+      const preview = document.createElement("img");
+      preview.className = "collection-thumbnail"; preview.src = previewUrl; preview.alt = "";
+      preview.onerror = () => preview.replaceWith(icon);
+      button.append(preview);
+    } else button.append(icon);
+    button.append(details, arrow);
     element.append(button);
     $("libraryList").append(element);
   };
-  if (recent.length) group("On this PC");
-  for (const item of recent)
+  for (const item of collections)
     row(
-      item.folderName || folderName(item.folderPath),
-      `On this PC · ${item.folderPath}`,
+      item.name,
+      `${item.imageCount} photos · ${!item.available ? "Folder unavailable" : item.shared ? "Shared" : "This PC only"}`,
       "Select",
       async () => {
-        render(await api("/api/settings", { folderPath: item.folderPath }));
+        if (dirty() && !confirm("Discard unsaved playback changes and select this collection?")) return;
+        const previous = selectedCollection;
+        selectedCollection = item.id;
+        try { render(await api("/api/state"), true); } catch (error) { selectedCollection = previous; throw error; }
         document
           .querySelector(".current")
           .scrollIntoView({ behavior: "smooth" });
       },
-      item.folderPath?.toLowerCase() === state.folderPath?.toLowerCase(),
+      item.id === state.collectionId,
+      item.previewUrl,
     );
   if (catalogs.length) group("Saved in this browser");
   for (const catalog of catalogs)
@@ -249,19 +273,21 @@ async function renderLibraries(state) {
       () =>
         openPlayer(`/show?offlineCatalog=${encodeURIComponent(catalog.id)}`),
     );
-  if (!recent.length && !catalogs.length) {
+  if (!collections.length && !catalogs.length) {
     const empty = document.createElement("p");
     empty.className = "library-empty";
     empty.textContent =
-      "Choose a folder to add your first collection.";
+      "Add your first collection.";
     $("libraryList").append(empty);
   }
 }
 async function refresh() {
   if (refreshing || busy || document.hidden) return;
   refreshing = true;
+  const requestedCollection = selectedCollection;
   try {
-    render(await api("/api/state"));
+    const state = await api("/api/state");
+    if (!busy && (requestedCollection === selectedCollection || !selectedCollection)) render(state);
   } catch {
     $("statusPill").textContent = "Disconnected";
     $("statusPill").classList.remove("is-connected");
@@ -293,7 +319,7 @@ function removeOverlay() {
   slideshowOverlay = null;
   $("playCurrent").focus();
 }
-async function openPlayer(url = "/show") {
+async function openPlayer(url = `/show?collection=${encodeURIComponent(currentState?.collectionId || "")}`) {
   const overlay = document.createElement("div");
   overlay.className = "slideshow-overlay";
   document.body.append(overlay);
@@ -333,6 +359,7 @@ $("settingsForm").onsubmit = (event) => {
     const result = await api("/api/settings", submitted);
     render(result, JSON.stringify(submitted) === JSON.stringify(values()));
     showToast("Changes saved");
+    $("preferencesDialog").close();
   });
 };
 $("discardSettings").onclick = () => {
@@ -341,7 +368,22 @@ $("discardSettings").onclick = () => {
 };
 for (const name of settingNames) $(name).addEventListener("input", pending);
 $("retry").onclick = refresh;
-$("watchDevice").onclick = () => $("deviceDialog").showModal();
+$("watchDevice").onclick = async () => {
+  try { await navigator.clipboard.writeText($("deviceAddress").value); showToast("Collection link copied"); }
+  catch { $("deviceDialog").showModal(); }
+};
+$("openPreferences").onclick = () => $("preferencesDialog").showModal();
+$("collectionShared").onchange = () => run($("collectionShared"), async () => {
+  try { render(await api(`/api/collections/${selectedCollection}`, { shared: $("collectionShared").checked })); }
+  catch (error) { $("collectionShared").checked = Boolean(currentState?.shared); throw error; }
+});
+$("renameCollection").onclick = () => run($("renameCollection"), async () => {
+  render(await api(`/api/collections/${selectedCollection}`, { name: $("collectionName").value }));
+});
+$("removeCollection").onclick = () => run($("removeCollection"), async () => {
+  if (!confirm(`Remove ${currentState.folderName} from Slide Show? Photo files and saved copies will be kept.`)) return;
+  render(await api(`/api/collections/${selectedCollection}`, undefined, { method: "DELETE" }), true);
+});
 $("networkAddress").onchange = () =>
   ($("deviceAddress").value = $("networkAddress").value);
 $("copyAddress").onclick = async () => {

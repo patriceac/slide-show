@@ -1,15 +1,15 @@
-const CACHE_NAME = "slide-show-shell-20260922-theme";
+const CACHE_NAME = "slide-show-shell-20260923-collections";
 const SHELL_URLS = [
   "/show",
   "/manifest.webmanifest",
-  "/assets/playback-state.js?v=20260922-gallery",
-  "/assets/theme.js?v=20260922-theme",
-  "/assets/theme.css?v=20260922-theme",
-  "/assets/slideshow.css?v=20260922-theme",
-  "/assets/slideshow.js?v=20260922-gallery",
-  "/assets/offline-crypto.js?v=20260922-gallery",
-  "/assets/offline-store.js?v=20260922-gallery",
-  "/assets/offline-sync.js?v=20260922-gallery",
+  "/assets/playback-state.js?v=20260923-collections",
+  "/assets/theme.js?v=20260923-collections",
+  "/assets/theme.css?v=20260923-collections",
+  "/assets/slideshow.css?v=20260923-collections",
+  "/assets/slideshow.js?v=20260923-collections",
+  "/assets/offline-crypto.js?v=20260923-collections",
+  "/assets/offline-store.js?v=20260923-collections",
+  "/assets/offline-sync.js?v=20260923-collections",
   "/assets/darkroom-stage.png"
 ];
 

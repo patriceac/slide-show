@@ -79,6 +79,7 @@ public class MainActivity extends Activity {
     private final ExecutorService preloadExecutor = Executors.newFixedThreadPool(2);
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Map<String, ServerInfo> discovered = new LinkedHashMap<>();
+    private final Map<String, ServerInfo> availableCollections = new LinkedHashMap<>();
     private final List<SlideImage> images = new ArrayList<>();
     private final Map<String, Bitmap> bitmapCache = new LinkedHashMap<>();
     private final Set<String> preloadInFlight = new HashSet<>();
@@ -338,8 +339,8 @@ public class MainActivity extends Activity {
         setTheme(darkTheme ? R.style.AppThemeDark : R.style.AppTheme);
         INK = Color.parseColor(darkTheme ? "#e5eaf1" : "#242b35");
         MUTED = Color.parseColor(darkTheme ? "#a4afbf" : "#697586");
-        ACCENT = Color.parseColor(darkTheme ? "#bfd2eb" : "#354c65");
-        SURFACE = Color.parseColor(darkTheme ? "#171c24" : "#fafaf9");
+        ACCENT = Color.parseColor(darkTheme ? "#bfd2eb" : "#36516a");
+        SURFACE = Color.parseColor(darkTheme ? "#171c24" : "#f8f8f7");
         LINE = Color.parseColor(darkTheme ? "#465268" : "#d7dbe0");
         CARD = Color.parseColor(darkTheme ? "#252e3c" : "#ffffff");
         PRIMARY_TEXT = darkTheme ? Color.rgb(25, 38, 53) : Color.WHITE;
@@ -413,13 +414,19 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams brandIconParams = new LinearLayout.LayoutParams(dp(24), dp(24));
         brandIconParams.rightMargin = dp(10);
         brand.addView(brandIcon, brandIconParams);
-        brand.addView(text("Slide Show", 18, INK, true));
+        brand.addView(text("Slide Show", 18, INK, true), new LinearLayout.LayoutParams(0, -2, 1));
+        Button appearance = themeButton(false);
+        appearance.setText("⋮");
+        appearance.setContentDescription("Theme on this device");
+        appearance.setBackground(buttonBackground(Color.TRANSPARENT, false));
+        appearance.setMinWidth(0); appearance.setMinimumWidth(0); appearance.setPadding(0,0,0,0);
+        brand.addView(appearance, new LinearLayout.LayoutParams(dp(36), dp(36)));
         shell.addView(brand);
-        TextView libraryTitle = text("Library", 34, INK, true);
-        libraryTitle.setPadding(0, dp(32), 0, dp(20));
+        TextView libraryTitle = text("Collections", 34, INK, true);
+        libraryTitle.setPadding(0, dp(24), 0, dp(8));
         shell.addView(libraryTitle);
 
-        discoveryTitle = text(title, 16, INK, true);
+        discoveryTitle = text(title, 15, MUTED, false);
         discoveryTitle.setPadding(0, 0, 0, dp(5));
         shell.addView(discoveryTitle);
 
@@ -451,11 +458,10 @@ public class MainActivity extends Activity {
         searchAgainButton.setOnClickListener(v -> discoverServers());
         actions.addView(searchAgainButton, fullButtonParams());
 
-        Button manual = button("Enter address manually", false);
+        Button manual = button("Enter PC address manually", false);
         manual.setBackground(buttonBackground(Color.TRANSPARENT, false));
         manual.setOnClickListener(v -> showManualAddressDialog());
         actions.addView(manual, fullButtonParams());
-        actions.addView(themeButton(false), fullButtonParams());
 
         root.addView(scroll);
         setContentView(root);
@@ -474,6 +480,7 @@ public class MainActivity extends Activity {
         if (discoveryInProgress) return;
         setDiscoveryInProgress(true);
         discovered.clear();
+        availableCollections.clear();
         if (discoveryList != null) {
             renderOfflineOptions(offlineStore.loadCatalogs());
         }
@@ -506,6 +513,7 @@ public class MainActivity extends Activity {
                 }
 
                 long stopAt = System.currentTimeMillis() + 2800;
+                Set<String> seen = new HashSet<>();
                 byte[] buffer = new byte[2048];
                 while (System.currentTimeMillis() < stopAt) {
                     try {
@@ -520,7 +528,7 @@ public class MainActivity extends Activity {
                         String host = response.getAddress().getHostAddress();
                         int port = object.optInt("Port", 5177);
                         ServerInfo info = new ServerInfo(object.optString("Name", "Slide Show"), host, port);
-                        handler.post(() -> { discovered.put(info.key(), info); renderDiscoveredServers(); });
+                        if (seen.add(info.key())) loadCollectionsFromServer(info);
                     } catch (Exception ignored) {
                     }
                 }
@@ -678,51 +686,115 @@ public class MainActivity extends Activity {
         return addresses;
     }
 
+    private void loadCollectionsFromServer(ServerInfo pc) throws Exception {
+        JSONObject listing = getJson(pc.baseUrl() + "/api/collections");
+        JSONArray entries = listing.getJSONArray("collections");
+        List<ServerInfo> collections = new ArrayList<>();
+        for (int i = 0; i < entries.length(); i++) {
+            JSONObject entry = entries.getJSONObject(i);
+            ServerInfo source = new ServerInfo(listing.optString("computerName", pc.name), pc.host, pc.port, pc.scheme);
+            source.collectionId = entry.getString("id");
+            source.collectionName = entry.optString("name", "Collection");
+            source.imageCount = entry.optInt("imageCount");
+            source.previewUrl = entry.optString("previewUrl", "");
+            collections.add(source);
+        }
+        handler.post(() -> {
+            discovered.put(pc.key(), pc);
+            availableCollections.entrySet().removeIf(entry -> entry.getValue().key().equals(pc.key()));
+            for (ServerInfo source : collections) availableCollections.put(source.key() + "/" + source.collectionId, source);
+            renderDiscoveredServers();
+        });
+    }
+
     private void renderDiscoveredServers() {
-        if (showingSlideshow || discoveryList == null) {
-            return;
-        }
-
+        if (showingSlideshow || discoveryList == null) return;
         discoveryList.removeAllViews();
-        int count = discovered.size();
-        if (count == 1) {
-            discoveryTitle.setText("PC available");
-        } else if (count > 1) {
-            discoveryTitle.setText("Choose a PC");
-        }
-        discoveryMessage.setText("Play directly from a PC on this Wi-Fi.");
-
-        for (ServerInfo info : discovered.values()) {
+        List<OfflineImageStore.OfflineCatalog> saved = offlineStore.loadCatalogs();
+        discoveryTitle.setText(availableCollections.size() + " available · " + saved.size() + " saved");
+        discoveryMessage.setVisibility(availableCollections.isEmpty() ? View.VISIBLE : View.GONE);
+        discoveryMessage.setText(discoveryInProgress ? "Searching this Wi-Fi…" : discovered.isEmpty()
+            ? "No shared collections found. Make sure Slide Show is running on your PC."
+            : "This PC has no shared collections. Turn on sharing for a collection on the PC.");
+        TextView section = text("Available on this Wi-Fi", 18, INK, true);
+        section.setPadding(0, dp(16), 0, 0);
+        discoveryList.addView(section);
+        for (ServerInfo info : availableCollections.values()) {
             LinearLayout row = card();
             LinearLayout heading = new LinearLayout(this);
             heading.setGravity(Gravity.CENTER_VERTICAL);
-            ImageView pcIcon = new ImageView(this);
-            pcIcon.setImageResource(R.drawable.ic_computer);
-            pcIcon.setImageTintList(ColorStateList.valueOf(MUTED));
-            LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(32), dp(32));
-            iconParams.rightMargin = dp(14);
-            heading.addView(pcIcon, iconParams);
+            ImageView thumbnail = new ImageView(this);
+            thumbnail.setImageResource(R.drawable.ic_photo);
+            thumbnail.setImageTintList(ColorStateList.valueOf(MUTED));
+            thumbnail.setScaleType(ImageView.ScaleType.CENTER);
+            thumbnail.setBackground(rounded(SURFACE, 8, false));
+            thumbnail.setClipToOutline(true);
+            thumbnail.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            LinearLayout.LayoutParams previewParams = new LinearLayout.LayoutParams(dp(80), dp(76));
+            previewParams.rightMargin = dp(16);
+            heading.addView(thumbnail, previewParams);
+            if (!info.previewUrl.isEmpty()) preloadExecutor.execute(() -> {
+                try {
+                    Bitmap preview = offlineStore.decodeOnlineBitmap(info.baseUrl() + info.previewUrl, dp(160), dp(152));
+                    handler.post(() -> {
+                        if (!isDestroyed() && thumbnail.isAttachedToWindow()) {
+                            thumbnail.setImageTintList(null); thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP); thumbnail.setImageBitmap(preview);
+                        } else preview.recycle();
+                    });
+                } catch (Exception ignored) { }
+            });
             LinearLayout identity = new LinearLayout(this);
             identity.setOrientation(LinearLayout.VERTICAL);
-            identity.addView(text(info.name, 17, INK, true));
-            TextView address = text(info.host + ":" + info.port, 13, MUTED, false);
-            identity.addView(address);
+            TextView name = text(info.collectionName, 18, INK, true);
+            name.setMaxLines(2); name.setEllipsize(TextUtils.TruncateAt.END);
+            identity.addView(name);
+            identity.addView(text(info.imageCount + " photos", 14, MUTED, false));
+            identity.addView(text(info.name, 14, MUTED, false));
             heading.addView(identity, new LinearLayout.LayoutParams(0, -2, 1));
             row.addView(heading);
-            Button connect = button("Play from this PC", true);
-            connect.setOnClickListener(v -> connectTo(info));
-            row.addView(connect, fullButtonParams());
+            LinearLayout actions = new LinearLayout(this);
+            Button play = button("Play", true);
+            play.setEnabled(info.imageCount > 0);
+            play.setOnClickListener(v -> connectTo(info));
+            actions.addView(play, new LinearLayout.LayoutParams(0, dp(40), 1));
+            Button save = button("Save offline", false);
+            save.setEnabled(info.imageCount > 0);
+            save.setOnClickListener(v -> saveCollectionOffline(info));
+            LinearLayout.LayoutParams saveParams = new LinearLayout.LayoutParams(0, dp(40), 1);
+            saveParams.leftMargin = dp(14);
+            actions.addView(save, saveParams);
+            row.addView(actions, fullButtonParams());
             discoveryList.addView(row, cardParams());
         }
-        List<OfflineImageStore.OfflineCatalog> saved = offlineStore.loadCatalogs();
         if (!saved.isEmpty()) addSavedHeading();
         for (OfflineImageStore.OfflineCatalog catalog : saved) discoveryList.addView(offlineCatalogCard(catalog, true), cardParams());
     }
 
+    private void saveCollectionOffline(ServerInfo info) {
+        if (syncInProgress) return;
+        executor.execute(() -> {
+            try {
+                OfflineSource source = getOfflineSource(info);
+                handler.post(() -> {
+                    int slot = offlineStore.chooseSlotForSync(info.key(), source.state);
+                    int workers = source.state.optInt("syncWorkers", 4);
+                    if (slot == 0) showReplacementPicker(info, source.state, source.imageList, workers, true);
+                    else {
+                        OfflineImageStore.OfflineCatalog existing = offlineStore.loadCatalog(slot);
+                        Runnable save = () -> syncToSlot(info, source.state, source.imageList, workers, slot, true);
+                        if (existing != null) ensureCatalogUnlocked(existing, save); else save.run();
+                    }
+                });
+            } catch (Exception error) {
+                handler.post(() -> new AlertDialog.Builder(this).setTitle("Collection unavailable")
+                    .setMessage("Make sure this collection is still shared from " + info.name + ". Your saved photos are unchanged.")
+                    .setPositiveButton("OK", null).show());
+            }
+        });
+    }
+
     private void showOfflineCatalogs(List<OfflineImageStore.OfflineCatalog> catalogs) {
-        discoveryTitle.setText("Choose an offline slideshow");
-        discoveryMessage.setText("No Slide Show server was found. Pick a saved slideshow to play on this device.");
-        renderOfflineOptions(catalogs);
+        renderDiscoveredServers();
     }
 
     private void showOfflineCatalogLaunchScreen() {
@@ -738,12 +810,7 @@ public class MainActivity extends Activity {
     }
 
     private void showServerLaunchScreen() {
-        showDiscoveryScreen("Slide Show", "Choose a PC to start the slideshow again.");
-        if (discovered.isEmpty()) {
-            discoveryMessage.setText("Search again to find a PC or enter its address manually.");
-            return;
-        }
-
+        showDiscoveryScreen("Collections", "");
         renderDiscoveredServers();
     }
 
@@ -760,8 +827,8 @@ public class MainActivity extends Activity {
     }
 
     private void addSavedHeading() {
-        TextView heading = text("Saved on this device", 16, INK, true);
-        heading.setPadding(0, dp(28), 0, dp(2));
+        TextView heading = text("Saved on this phone", 18, INK, true);
+        heading.setPadding(0, dp(20), 0, 0);
         discoveryList.addView(heading);
     }
 
@@ -798,37 +865,33 @@ public class MainActivity extends Activity {
         }
         LinearLayout identity = new LinearLayout(this);
         identity.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout titleRow = new LinearLayout(this);
         TextView name = text(cleanFolderName(catalog.displayName), 18, INK, true);
-        name.setMaxLines(2);
-        name.setEllipsize(TextUtils.TruncateAt.END);
-        identity.addView(name);
-        TextView details = text(savedCatalogSummary(catalog), 13, MUTED, false);
-        details.setPadding(0, dp(2), 0, dp(2));
-        identity.addView(details);
-        identity.addView(text("Saved " + savedDateText(catalog.syncedAt), 12, MUTED, false));
-        heading.addView(identity, new LinearLayout.LayoutParams(0, -2, 1));
-        row.addView(heading);
-
-        LinearLayout actions = new LinearLayout(this);
-        actions.setGravity(Gravity.CENTER_VERTICAL);
-        if (allowDelete) row.addView(actions, fullButtonParams());
-
+        name.setMaxLines(2); name.setEllipsize(TextUtils.TruncateAt.END);
+        titleRow.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
+        if (allowDelete) {
+            Button more = button("⋮", false);
+            more.setMinWidth(0); more.setMinimumWidth(0); more.setMinHeight(0); more.setMinimumHeight(0); more.setPadding(0,0,0,0);
+            more.setBackground(buttonBackground(Color.TRANSPARENT, false));
+            more.setContentDescription("Options for " + catalog.displayName);
+            more.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle(catalog.displayName)
+                .setItems(new String[]{"Rename saved copy", "Delete saved copy"}, (dialog, which) -> ensureCatalogUnlocked(catalog, () -> {
+                    if (which == 0) showRenameCatalogDialog(reloadCatalog(catalog));
+                    else confirmDeleteCatalog(reloadCatalog(catalog), false);
+                })).show());
+            titleRow.addView(more, new LinearLayout.LayoutParams(dp(28), dp(28)));
+        }
+        identity.addView(titleRow);
+        identity.addView(text(catalog.images.size() + " photos · " + (catalog.hasPin() ? "PIN protected" : "Saved copy"), 12, MUTED, false));
         if (canTryOpenOffline(catalog)) {
             Button open = button("Play offline", true);
             open.setOnClickListener(v -> openOfflineCatalog(catalog));
-            if (allowDelete) actions.addView(open, new LinearLayout.LayoutParams(0, -2, 1));
-            else row.addView(open, fullButtonParams());
+            LinearLayout.LayoutParams openParams = new LinearLayout.LayoutParams(-1, dp(40));
+            openParams.topMargin = dp(8);
+            identity.addView(open, openParams);
         }
-
-        if (allowDelete) {
-            Button delete = button("Delete", false);
-            delete.setContentDescription("Delete saved slideshow " + cleanFolderName(catalog.displayName));
-            delete.setBackground(buttonBackground(Color.TRANSPARENT, false));
-            delete.setOnClickListener(v -> ensureCatalogUnlocked(catalog, () -> confirmDeleteCatalog(reloadCatalog(catalog), false)));
-            LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(-2, -2);
-            deleteParams.leftMargin = dp(8);
-            actions.addView(delete, deleteParams);
-        }
+        heading.addView(identity, new LinearLayout.LayoutParams(0, -2, 1));
+        row.addView(heading);
         return row;
     }
 
@@ -840,7 +903,7 @@ public class MainActivity extends Activity {
         input.setPadding(dp(16), dp(10), dp(16), dp(10));
 
         new AlertDialog.Builder(this)
-            .setTitle("Enter server address")
+            .setTitle("Enter PC address")
             .setView(input)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Connect", (dialog, which) -> {
@@ -856,7 +919,13 @@ public class MainActivity extends Activity {
                     URL url = new URL(value);
                     int port = url.getPort() > 0 ? url.getPort() : ("https".equals(url.getProtocol()) ? 443 : 5177);
                     if (url.getHost().isEmpty()) throw new IllegalArgumentException("Missing host");
-                    connectTo(new ServerInfo("Slide Show", url.getHost(), port, url.getProtocol()));
+                    ServerInfo info = new ServerInfo("Slide Show", url.getHost(), port, url.getProtocol());
+                    setDiscoveryInProgress(true);
+                    executor.execute(() -> {
+                        try { loadCollectionsFromServer(info); }
+                        catch (Exception error) { handler.post(() -> { discoveryMessage.setText("Could not reach this PC. Check the address and try again."); discoveryMessage.setVisibility(View.VISIBLE); }); }
+                        finally { handler.post(() -> setDiscoveryInProgress(false)); }
+                    });
                 } catch (Exception ignored) {
                     showDiscoveryScreen("Couldn't connect to Slide Show", "Check the address and try again.");
                 }
@@ -867,7 +936,7 @@ public class MainActivity extends Activity {
     private void connectTo(ServerInfo info) {
         final int generation = ++connectionGeneration;
         connectedServer = info;
-        showDiscoveryScreen("Connecting to " + info.name, "Opening photos from this PC. You can save an offline copy from playback settings.");
+        showDiscoveryScreen("Opening " + info.collectionName, "From " + info.name);
         executor.execute(() -> {
             try {
                 OfflineSource source = getOfflineSource(info);
@@ -888,7 +957,7 @@ public class MainActivity extends Activity {
         String name = state.optString("folderName", "Slide Show");
         return new OfflineImageStore.OfflineCatalog(0, info.key(), info.name, OfflineImageStore.folderIdentityFor(info.key(), state), name, name,
             state.optString("backgroundColor", "#05070a"), state.optString("imageMode", "fit"), state.optInt("slideSeconds",7),
-            state.optLong("version",0), 0, 0, "", "", "", offlineStore.imagesForSource(info.key(), source.imageList)).withOrder(state.optString("playbackOrder","shuffle"));
+            state.optLong("version",0), 0, 0, "", "", "", offlineStore.imagesForSource(info.key(), source.imageList)).withOrder(state.optString("playbackOrder","shuffle")).withCollectionId(state.optString("collectionId", ""));
     }
 
     private void saveOfflineFromCurrent() {
@@ -901,8 +970,9 @@ public class MainActivity extends Activity {
                 OfflineSource source = getOfflineSource(info);
                 handler.post(() -> {
                     if (activeCatalog != selected) return;
-                    if (!OfflineImageStore.folderIdentityFor(info.key(), source.state).equals(selected.folderIdentity)) {
-                        new AlertDialog.Builder(this).setTitle("Different folder on the PC").setMessage("Select " + selected.folderName + " on the PC before saving this copy.").setPositiveButton("OK",null).show(); return;
+                    if (!OfflineImageStore.folderIdentityFor(info.key(), source.state).equals(selected.folderIdentity)
+                        && !(info.key() + "\n" + source.state.optString("folderName")).equals(selected.folderIdentity)) {
+                        new AlertDialog.Builder(this).setTitle("Collection unavailable").setMessage("The source no longer matches this saved copy.").setPositiveButton("OK",null).show(); return;
                     }
                     int slot = offlineStore.chooseSlotForSync(info.key(), source.state);
                     int workers = source.state.optInt("syncWorkers",4);
@@ -948,6 +1018,7 @@ public class MainActivity extends Activity {
                         if (activeOffline) openOfflineCatalog(saved);
                         else { restoreActiveHeader(); showTapFeedback("Saved on this device", Gravity.CENTER); buildSettingsPanel(); }
                     }
+                    else if (!showingSlideshow) renderDiscoveredServers();
                 });
             } catch (Exception error) {
                 handler.post(() -> { progress.dismiss(); new AlertDialog.Builder(this).setTitle(canceled.get()?"Download canceled":"Could not save photos")
@@ -983,8 +1054,19 @@ public class MainActivity extends Activity {
     }
 
     private OfflineSource getOfflineSource(ServerInfo info) throws Exception {
+        if (info.collectionId.isEmpty()) {
+            JSONObject listing = getJson(info.baseUrl() + "/api/collections");
+            JSONArray collections = listing.optJSONArray("collections");
+            if (collections != null) for (int i = 0; i < collections.length(); i++) {
+                String id = collections.getJSONObject(i).getString("id");
+                JSONObject candidate = getJson(info.baseUrl() + "/api/state?collection=" + id);
+                if (OfflineImageStore.folderIdentityFor(info.key(), candidate).equals(info.expectedFolderIdentity)
+                    || (info.key() + "\n" + candidate.optString("folderName")).equals(info.expectedFolderIdentity)) { info.collectionId = id; break; }
+            }
+            if (info.collectionId.isEmpty()) throw new java.io.IOException("This collection is no longer shared from its PC.");
+        }
         try {
-            JSONObject source = getJson(info.baseUrl() + "/api/offline-source");
+            JSONObject source = getJson(info.sourceUrl("/api/offline-source"));
             JSONObject state = source.optJSONObject("state");
             JSONArray imageList = source.optJSONArray("images");
             if (state != null && imageList != null) {
@@ -994,15 +1076,19 @@ public class MainActivity extends Activity {
         }
 
         return new OfflineSource(
-            getJson(info.baseUrl() + "/api/state"),
-            getJsonArray(info.baseUrl() + "/api/images?shuffle=false"));
+            getJson(info.sourceUrl("/api/state")),
+            getJsonArray(info.sourceUrl("/api/images?shuffle=false")));
     }
 
     private ServerInfo serverInfoForCatalog(OfflineImageStore.OfflineCatalog catalog) {
         if (catalog == null || catalog.serverKey == null || catalog.serverKey.isEmpty()) return null;
         try {
             URL url = new URL(catalog.serverKey.contains("://") ? catalog.serverKey : "http://" + catalog.serverKey);
-            return new ServerInfo(catalog.serverName,url.getHost(),url.getPort()>0?url.getPort():url.getDefaultPort(),url.getProtocol());
+            ServerInfo info = new ServerInfo(catalog.serverName,url.getHost(),url.getPort()>0?url.getPort():url.getDefaultPort(),url.getProtocol());
+            info.collectionId = catalog.collectionId;
+            info.collectionName = catalog.folderName;
+            info.expectedFolderIdentity = catalog.folderIdentity;
+            return info;
         } catch (Exception error) { return null; }
     }
 
@@ -1676,6 +1762,7 @@ public class MainActivity extends Activity {
                         }
                         buildSettingsPanel();
                     }
+                    if (!showingSlideshow) renderDiscoveredServers();
                 } catch (Exception ignored) {
                 }
             })
@@ -1701,14 +1788,7 @@ public class MainActivity extends Activity {
             recycleCurrentBitmap();
             activeCatalog = null;
             activeOffline = false;
-            List<OfflineImageStore.OfflineCatalog> catalogs = offlineStore.loadCatalogs();
-            showDiscoveryScreen("Looking for Slide Show on this Wi-Fi", "Make sure your phone and PC are on the same network.");
-            if (catalogs.isEmpty()) {
-                discoveryTitle.setText("No saved slideshows");
-                discoveryMessage.setText("Connect to Slide Show to save a slideshow for offline use.");
-            } else {
-                showOfflineCatalogs(catalogs);
-            }
+            showServerLaunchScreen();
             return;
         }
 
@@ -1716,16 +1796,7 @@ public class MainActivity extends Activity {
             buildSettingsPanel();
         }
 
-        if (discoveryList != null) {
-            List<OfflineImageStore.OfflineCatalog> catalogs = offlineStore.loadCatalogs();
-            if (!catalogs.isEmpty()) {
-                renderOfflineOptions(catalogs);
-            } else {
-                discoveryList.removeAllViews();
-                discoveryTitle.setText("No saved slideshows");
-                discoveryMessage.setText("Connect to Slide Show to save a slideshow for offline use.");
-            }
-        }
+        if (!showingSlideshow) renderDiscoveredServers();
     }
 
     private void lockActiveSlideshow() {
@@ -2209,7 +2280,7 @@ public class MainActivity extends Activity {
         executor.execute(() -> {
             try {
                 JSONObject body = new JSONObject(); body.put("slideSeconds",seconds); body.put("imageMode",size); body.put("playbackOrder",order);
-                postJson(target.baseUrl() + "/api/playback-settings",body);
+                postJson(target.sourceUrl("/api/playback-settings"),body);
             } catch (Exception error) { handler.post(() -> { if (showingSlideshow && connectionNotice != null) {connectionNotice.setText("Settings could not be saved to the PC. Reconnect and try again.");connectionNotice.setVisibility(View.VISIBLE);} }); }
         });
     }
@@ -2266,6 +2337,7 @@ public class MainActivity extends Activity {
                     boolean orderChanged = !playbackOrder.equals(next.playbackOrder);
                     boolean durationChanged = slideSeconds != next.slideSeconds;
                     savePlayback(); activeCatalog=next; slideSeconds=next.slideSeconds; imageMode=next.imageMode; playbackOrder=next.playbackOrder;
+                    restoreActiveHeader();
                     root.setBackgroundColor(parseColor(next.backgroundColor)); applyImageMode(); updateSettingsText(); updateImageModeButtons();
                     if (contentChanged) { restorePlayback(); renderCurrentSlide(); }
                     else if (orderChanged) { arrangeImages(Collections.emptyList()); renderCurrentSlide(); }
@@ -2402,7 +2474,7 @@ public class MainActivity extends Activity {
     private LinearLayout card() {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(dp(16), dp(16), dp(16), dp(16));
+        row.setPadding(dp(12), dp(12), dp(12), dp(12));
         row.setBackground(rounded(CARD, 12, true));
         return row;
     }
@@ -2496,11 +2568,13 @@ public class MainActivity extends Activity {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
-    private static final class ServerInfo {
+    static final class ServerInfo {
         final String name;
         final String host;
         final int port;
         final String scheme;
+        String collectionId = "", collectionName = "", previewUrl = "", expectedFolderIdentity = "";
+        int imageCount;
 
         ServerInfo(String name, String host, int port) { this(name,host,port,"http"); }
         ServerInfo(String name, String host, int port, String scheme) {
@@ -2516,6 +2590,9 @@ public class MainActivity extends Activity {
 
         String baseUrl() {
             return scheme + "://" + host + ":" + port;
+        }
+        String sourceUrl(String path) {
+            return baseUrl() + path + (path.contains("?") ? "&" : "?") + "collection=" + collectionId;
         }
     }
 

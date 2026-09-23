@@ -68,12 +68,24 @@ public sealed class TrayApplicationContext : ApplicationContext
     private ContextMenuStrip BuildTrayMenu()
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add("Open control center", null, (_, _) => OpenControlCenter());
-        menu.Items.Add("Open slideshow", null, (_, _) => _ = OpenSlideshowWindowAsync());
-        menu.Items.Add("Copy mobile link", null, (_, _) => CopyMobileLink());
+        menu.Items.Add("Manage collections", null, (_, _) => OpenControlCenter());
+        var play = new ToolStripMenuItem("Play collection");
+        var copy = new ToolStripMenuItem("Copy collection link");
+        menu.Items.Add(play);
+        menu.Items.Add(copy);
+        menu.Opening += (_, _) =>
+        {
+            play.DropDownItems.Clear(); copy.DropDownItems.Clear();
+            foreach (var collection in _state.GetCollections(true))
+            {
+                play.DropDownItems.Add(collection.Name, null, (_, _) => _ = OpenSlideshowWindowAsync(collection.Id));
+                if (collection.Shared) copy.DropDownItems.Add(collection.Name, null, (_, _) => CopyMobileLink(collection.Id));
+            }
+            play.Enabled = play.DropDownItems.Count > 0;
+            copy.Enabled = copy.DropDownItems.Count > 0;
+        };
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Choose folder", null, async (_, _) => await ChooseAndApplyFolderAsync());
-        menu.Items.Add("Rescan images", null, (_, _) => Rescan());
+        menu.Items.Add("Add collection", null, async (_, _) => await ChooseAndApplyFolderAsync());
         menu.Items.Add(new ToolStripSeparator());
 
         _startupItem = new ToolStripMenuItem("Start at login")
@@ -210,7 +222,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void OpenControlCenter() => OpenUrl($"http://localhost:{_state.Port}/settings");
 
-    private Task OpenSlideshowWindowAsync()
+    private Task OpenSlideshowWindowAsync(string? collectionId)
     {
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -218,7 +230,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             try
             {
-                var url = $"http://localhost:{_state.Port}/show?window=1";
+                var snapshot = _state.GetSnapshot(true, collectionId);
+                var url = snapshot.LocalSlideshowUrl + (snapshot.CollectionId is null ? "?" : "&") + "window=1";
                 if (_slideshowWindow is { IsDisposed: false })
                 {
                     _slideshowWindow.Close();
@@ -253,11 +266,11 @@ public sealed class TrayApplicationContext : ApplicationContext
         return tcs.Task;
     }
 
-    private void CopyMobileLink()
+    private void CopyMobileLink(string collectionId)
     {
         try
         {
-            var snapshot = _state.GetSnapshot(true);
+            var snapshot = _state.GetSnapshot(true, collectionId);
             var link = snapshot.DisplaySlideshowUrl;
             Clipboard.SetText(link);
         }

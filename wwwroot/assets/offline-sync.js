@@ -6,7 +6,7 @@ import {
   encryptBlob,
   generateLocalKey,
   randomBytes
-} from "./offline-crypto.js?v=20260922-gallery";
+} from "./offline-crypto.js?v=20260923-collections";
 import {
   MAX_CATALOGS,
   findCatalogByIdentity,
@@ -14,7 +14,7 @@ import {
   listCatalogs,
   makeServerKey,
   saveCatalogBundle
-} from "./offline-store.js?v=20260922-gallery";
+} from "./offline-store.js?v=20260923-collections";
 
 function cleanName(value, fallback = "Slide Show") {
   return (value || "").trim() || fallback;
@@ -136,6 +136,7 @@ export async function syncCatalog({
     folderPath: state.folderPath || "",
     serverKey: plan.serverKey,
     folderIdentity: plan.folderIdentity,
+    collectionId: state.collectionId || '',
     serverVersion: state.version || 0,
     imageMode: state.imageMode || "fit",
     playbackOrder: state.playbackOrder || "shuffle",

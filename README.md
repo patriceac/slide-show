@@ -1,16 +1,18 @@
 # Slide Show
 
-Slide Show is a local Windows slideshow controller with a companion Android viewer. The Windows app serves the slideshow experience from local web assets, and the Android app can discover and display the slideshow on the local network.
+Slide Show manages photo collections on Windows and plays them on Windows, Android, or a browser. Several collections can be shared from one PC on the local network.
 
 ## Watching photos
 
-1. Open Slide Show on Windows and choose a photo folder. The Library shows recent PC folders and copies saved in this browser.
-2. Use **Play here**, or **Watch on another device** to copy the address for a phone on the same Wi-Fi. Keep the PC and tray app running during connected playback.
-3. On Android, choose a PC to start streaming. Use **Save offline** in playback settings when you want a copy on the phone. **Play offline** opens a saved copy immediately; **Update saved copy** refreshes it when its source folder is selected on the PC.
+1. On Windows, **Add collection** chooses a photo folder. Select a collection to play it, rename it under **Folder details**, or change its playback options.
+2. Turn on **Available to other devices** to share that collection. **Copy collection link** opens that specific collection on another device. Keep the PC and tray app running during connected playback.
+3. Android lists available collections with the PC shown as their source. **Play** streams the selected collection; **Save offline** saves it on the phone. **Play offline** opens the saved copy. Refreshing a saved copy uses its original collection, independently of the desktop selection.
 
-Playback supports shuffle, file name, and modification date order, and remembers the current photo per library on each device. **Show entire photo** preserves the edges; **Fill screen** crops them. Playback changes on connected viewers apply to the PC's other connected viewers; saved copies have independent settings.
+Playback supports shuffle, file name, and modification date order, and remembers the current photo per collection on each device. Choosing a collection never switches another viewer. **Show entire photo** preserves the edges; **Fill screen** crops them. Connected viewers of the same collection share playback options; different collections and saved copies have independent settings.
 
-**Theme** offers System (the default), Light, and Dark in the library and playback settings. The choice is saved on each browser or Android device, follows system changes automatically, and leaves the photo background unchanged.
+**Theme** offers System (the default), Light, and Dark from the collections screen's ⋮ menu and playback settings. The choice is saved on each browser or Android device, follows system changes automatically, and leaves the photo background unchanged.
+
+Existing recent folders migrate to named collections. The previously selected folder keeps its sharing enabled; older folders remain available only on this PC until shared. Existing saved copies and PINs are preserved.
 
 Offline downloads show progress and can be canceled. A failed or canceled replacement preserves the previous copy. Android keeps up to four saved libraries. Browser saving requires HTTPS or localhost and available browser storage. Browser copies belong to the browser and address where they were saved.
 

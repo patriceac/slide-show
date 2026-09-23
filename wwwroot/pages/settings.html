@@ -4,12 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#f8f8f7" />
-  <title>Slide Show · Library</title>
+  <title>Slide Show · Collections</title>
   <link rel="icon" href="/assets/darkroom-stage.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <script src="/assets/theme.js?v=20260922-theme"></script>
-  <link rel="stylesheet" href="/assets/theme.css?v=20260922-theme" />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260922-fit" />
+  <script src="/assets/theme.js?v=20260923-collections"></script>
+  <link rel="stylesheet" href="/assets/theme.css?v=20260923-collections" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260923-collections-2" />
 </head>
 <body>
   <svg class="icon-definitions" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
@@ -17,44 +17,44 @@
     <symbol id="icon-screen" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></symbol>
     <symbol id="icon-photo" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 5-5 4 4 4-6 5 7"/></symbol>
     <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5m10.2-4A8 8 0 0 0 5 6M4.8 16A8 8 0 0 0 19 18"/></symbol>
-    <symbol id="icon-sliders" viewBox="0 0 24 24"><path d="M4 7h8m4 0h4M4 17h3m4 0h9"/><circle cx="14" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+    <symbol id="icon-sliders" viewBox="0 0 24 24"><path d="m9 3 1-2h4l1 2 2 1 2-.2 2 3.4-1.2 1.7v2.2l1.2 1.7-2 3.4-2-.2-2 1-1 2h-4l-1-2-2-1-2 .2-2-3.4 1.2-1.7V8.9L3 7.2l2-3.4 2 .2Z" transform="translate(0 2)"/><circle cx="12" cy="12" r="3"/></symbol>
     <symbol id="icon-folder" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+    <symbol id="icon-link" viewBox="0 0 24 24"><path d="m10 13 4-4m-6 7-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 1 1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0" transform="translate(1 0)"/></symbol>
   </svg>
   <header class="topbar">
     <a class="brand" href="#library" aria-label="Slide Show library"><span class="brand-mark"><svg class="icon"><use href="#icon-photo"/></svg></span>Slide Show</a>
-    <nav aria-label="Main"><button id="openLibrary" class="text-button">Library</button><span id="statusPill" role="status">Connecting…</span></nav>
+    <nav aria-label="Main"><button id="openLibrary" class="text-button">Collections</button><span id="statusPill" role="status">Connecting…</span><button id="openPreferences" class="preferences-button" aria-label="Theme and app settings" title="Theme and app settings">⋮</button></nav>
   </header>
   <div class="shell">
     <aside class="sidebar">
       <section id="library" class="library-section" aria-labelledby="libraryTitle" tabindex="-1">
         <div class="section-heading"><h2 id="libraryTitle">Collections</h2><span class="library-count" id="libraryCount"></span></div>
+        <button id="chooseFolder" class="primary-button add-collection"><span aria-hidden="true">＋</span>Add collection</button>
         <div id="libraryList" class="library-list"></div>
       </section>
-      <p class="sidebar-note">Your folders stay on your PC.<br>Saved copies stay in this browser.</p>
     </aside>
     <main class="workspace">
       <div id="connectionError" class="notice" hidden><span>Cannot reach Slide Show. Open the app from the system tray, then retry.</span><button id="retry">Retry</button></div>
       <section class="current" aria-labelledby="currentSlideshowName">
-        <div class="workspace-heading"><span class="eyebrow">Your photos</span><button id="chooseFolder" class="quiet-button">Choose photos</button></div>
         <div class="stage-media">
           <img id="stagePreview" alt="Preview of selected photos" hidden />
-          <div id="stageEmpty"><svg class="empty-photo icon" aria-hidden="true"><use href="#icon-photo"/></svg><p>No photos selected</p><span>Choose a folder to start your collection.</span></div>
+          <div id="stageEmpty"><svg class="empty-photo icon" aria-hidden="true"><use href="#icon-photo"/></svg><p>No collection selected</p><span>Add a collection to start.</span></div>
         </div>
         <div class="source">
-          <div class="source-title"><h1 id="currentSlideshowName">Choose your photos</h1><p class="meta"><span id="imageCount">0</span> photos<span class="meta-dot">·</span><span id="currentFolderDetail">On this PC</span></p></div>
-          <div class="button-row"><button id="playCurrent" class="primary-button" disabled><svg class="icon" aria-hidden="true"><use href="#icon-play"/></svg>Play here</button><button id="watchDevice" disabled><svg class="icon" aria-hidden="true"><use href="#icon-screen"/></svg>Watch on another device</button></div>
+          <div class="source-title"><h1 id="currentSlideshowName">Add a collection</h1><p class="meta"><span id="imageCount">0</span> photos<span class="meta-dot">·</span><span id="currentFolderDetail">On this PC</span></p></div>
+          <div class="button-row"><button id="playCurrent" class="primary-button" disabled><svg class="icon" aria-hidden="true"><use href="#icon-play"/></svg>Play collection</button><button id="watchDevice" disabled><svg class="icon" aria-hidden="true"><use href="#icon-link"/></svg>Copy collection link</button></div>
         </div>
         <p id="scanMessage" class="notice" hidden></p>
       </section>
-      <section class="appearance-settings" aria-labelledby="appearanceTitle">
-        <div><h2 id="appearanceTitle">Appearance</h2><p class="hint">Saved automatically for this browser.</p></div>
-        <label for="themePreference">Theme<select id="themePreference" data-theme-select><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+      <section class="sharing-row">
+        <div><h2>Available to other devices</h2><p id="sharingDetail">Choose a collection to share.</p></div>
+        <input id="collectionShared" class="sharing-switch" type="checkbox" role="switch" aria-label="Available to other devices" disabled />
       </section>
       <form id="settingsForm">
         <details class="settings-section" id="playbackOptions">
-          <summary><svg class="icon" aria-hidden="true"><use href="#icon-sliders"/></svg><span>Playback options</span><span class="settings-summary" id="playbackSummary"></span></summary>
+          <summary><svg class="icon" aria-hidden="true"><use href="#icon-sliders"/></svg><span>Playback options for this collection</span><span class="settings-summary" id="playbackSummary"></span></summary>
           <div class="settings-content">
-            <p class="hint">Applies to viewers connected to this PC. Saved copies keep their own settings.</p>
+            <p class="hint">Applies to viewers playing this collection. Saved copies keep their own settings.</p>
             <div class="settings-grid">
               <label>Seconds per photo<input id="slideSeconds" type="number" min="2" max="120" step="1" required /></label>
               <label>Photo order<select id="playbackOrder"><option value="shuffle">Shuffle</option><option value="name">File name (A–Z)</option><option value="date">Date modified (oldest first)</option></select></label>
@@ -64,31 +64,31 @@
             <label class="toggle-row"><input id="includeSubfolders" type="checkbox" />Include photos from subfolders</label>
           </div>
         </details>
-        <details class="settings-section">
-          <summary><svg class="icon" aria-hidden="true"><use href="#icon-screen"/></svg><span>Startup &amp; connection</span></summary>
-          <div class="settings-content">
-            <label class="toggle-row"><input id="startAtLogin" type="checkbox" />Start Slide Show when I sign in to Windows</label>
-            <label class="workers">Simultaneous offline downloads<input id="syncWorkers" type="number" min="2" max="4" step="1" required /></label>
-            <p class="hint">Server port <span id="serverPort">5177</span>. Use “Watch on another device” to connect.</p>
-          </div>
-        </details>
         <div class="save-row"><span id="saveStatus" role="status"></span><button id="discardSettings" type="button" hidden>Discard</button><button id="saveSettings" class="primary-button" disabled>Save changes</button></div>
       </form>
-      <div class="folder-tools"><details><summary>Folder details</summary><p id="folderPath" class="path"></p><p class="hint">Last checked <span id="lastScan">never</span></p><p class="hint">JPG, PNG, WebP, GIF, BMP, AVIF and SVG. Convert HEIC/HEIF first.</p></details><button id="rescan" class="text-button"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"/></svg>Check for new photos</button></div>
-      <footer>Slide Show keeps running in the system tray when you close this tab.</footer>
+      <div class="folder-tools"><details><summary><svg class="icon" aria-hidden="true"><use href="#icon-folder"/></svg>Folder details</summary><p id="folderPath" class="path"></p><label>Collection name<input id="collectionName" maxlength="120" /></label><div class="collection-tools"><button id="renameCollection">Rename</button><button id="removeCollection">Remove collection</button></div><p class="hint">Last checked <span id="lastScan">never</span></p><p class="hint">JPG, PNG, WebP, GIF, BMP, AVIF and SVG. Convert HEIC/HEIF first.</p></details><button id="rescan" class="text-button"><svg class="icon" aria-hidden="true"><use href="#icon-refresh"/></svg>Check for new photos</button></div>
     </main>
   </div>
   <dialog id="deviceDialog" aria-labelledby="deviceTitle">
     <form method="dialog"><button class="dialog-close" aria-label="Close">×</button></form>
     <div class="dialog-symbol"><svg class="icon" aria-hidden="true"><use href="#icon-screen"/></svg></div>
-    <h2 id="deviceTitle">Watch on another device</h2>
-    <p>Connect both devices to the same Wi-Fi, then open this link in a browser or the Android app.</p>
+    <h2 id="deviceTitle">Collection link</h2>
+    <p>Open this collection on another device connected to the same Wi-Fi.</p>
     <label for="deviceAddress">Address on <strong id="computerName">this PC</strong></label>
     <div class="copy-row"><input id="deviceAddress" readonly /><button id="copyAddress" class="primary-button">Copy link</button></div>
     <p id="deviceStatus" role="status"></p>
     <details><summary>Connection help</summary><p>Keep this PC awake and Slide Show running. If the address does not open, check that Windows Firewall allows Slide Show on your private network.</p><label>Try another network address<select id="networkAddress"></select></label><p>Android can save photos for offline use. Browser offline saving requires a secure connection.</p></details>
   </dialog>
+  <dialog id="preferencesDialog" aria-labelledby="preferencesTitle">
+    <form method="dialog"><button class="dialog-close" aria-label="Close">×</button></form>
+    <h2 id="preferencesTitle">App settings</h2>
+    <label>Theme<select id="themePreference" data-theme-select><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+    <label class="toggle-row"><input id="startAtLogin" type="checkbox" form="settingsForm" />Start Slide Show when I sign in to Windows</label>
+    <label>Simultaneous offline downloads<input id="syncWorkers" type="number" min="2" max="4" step="1" form="settingsForm" /></label>
+    <p class="hint">Server port <span id="serverPort">5177</span>. Slide Show keeps running in the system tray.</p>
+    <button class="primary-button" type="submit" form="settingsForm">Save app settings</button>
+  </dialog>
   <div class="toast" id="toast" role="status"></div>
-  <script type="module" src="/assets/control.js?v=20260922-gallery"></script>
+  <script type="module" src="/assets/control.js?v=20260923-collections"></script>
 </body>
 </html>

@@ -4,6 +4,8 @@ public sealed class AppSettings
 {
     public string? FolderPath { get; set; }
     public List<RecentSlideshow> RecentSlideshows { get; set; } = [];
+    public List<PhotoCollection> Collections { get; set; } = [];
+    public bool CollectionsMigrated { get; set; }
     public bool IncludeSubfolders { get; set; } = true;
     public int SlideSeconds { get; set; } = 7;
     public string BackgroundColor { get; set; } = "#05070a";
@@ -20,6 +22,8 @@ public sealed class AppSettings
         RecentSlideshows = RecentSlideshows
             .Select(slideshow => slideshow.Copy())
             .ToList(),
+        Collections = Collections.Select(collection => collection.Copy()).ToList(),
+        CollectionsMigrated = CollectionsMigrated,
         IncludeSubfolders = IncludeSubfolders,
         SlideSeconds = SlideSeconds,
         BackgroundColor = BackgroundColor,
@@ -72,6 +76,67 @@ public sealed class AppSettings
             .OrderByDescending(slideshow => slideshow.LastUsedAt)
             .Take(8)
             .ToList();
+
+        if (!CollectionsMigrated)
+        {
+            var folders = RecentSlideshows.Select(item => item.FolderPath)
+                .Prepend(FolderPath ?? "").Where(path => !string.IsNullOrWhiteSpace(path))
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in folders)
+            {
+                if (Collections.Any(item => string.Equals(item.FolderPath, path, StringComparison.OrdinalIgnoreCase))) continue;
+                var collection = new PhotoCollection { FolderPath = path, Name = RecentSlideshow.DisplayNameFor(path),
+                    Shared = string.Equals(path, FolderPath, StringComparison.OrdinalIgnoreCase) };
+                collection.ReadPlayback(this);
+                Collections.Add(collection);
+            }
+            CollectionsMigrated = true;
+        }
+        foreach (var collection in Collections) collection.Normalize();
+    }
+}
+
+public sealed class PhotoCollection
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string Name { get; set; } = "";
+    public string FolderPath { get; set; } = "";
+    public bool Shared { get; set; }
+    public bool IncludeSubfolders { get; set; } = true;
+    public int SlideSeconds { get; set; } = 7;
+    public string BackgroundColor { get; set; } = "#05070a";
+    public string ImageMode { get; set; } = "fit";
+    public string PlaybackOrder { get; set; } = "shuffle";
+
+    public PhotoCollection Copy() => (PhotoCollection)MemberwiseClone();
+
+    public void Normalize()
+    {
+        if (string.IsNullOrWhiteSpace(Id)) Id = Guid.NewGuid().ToString("N");
+        FolderPath = FolderPath.Trim();
+        Name = string.IsNullOrWhiteSpace(Name) ? RecentSlideshow.DisplayNameFor(FolderPath) : Name.Trim();
+        SlideSeconds = Math.Clamp(SlideSeconds, 2, 120);
+        ImageMode = ImageMode == "full" ? "full" : "fit";
+        PlaybackOrder = PlaybackOrder is "name" or "date" ? PlaybackOrder : "shuffle";
+    }
+
+    public void ApplyTo(AppSettings settings)
+    {
+        settings.FolderPath = FolderPath;
+        settings.IncludeSubfolders = IncludeSubfolders;
+        settings.SlideSeconds = SlideSeconds;
+        settings.BackgroundColor = BackgroundColor;
+        settings.ImageMode = ImageMode;
+        settings.PlaybackOrder = PlaybackOrder;
+    }
+
+    public void ReadPlayback(AppSettings settings)
+    {
+        IncludeSubfolders = settings.IncludeSubfolders;
+        SlideSeconds = settings.SlideSeconds;
+        BackgroundColor = settings.BackgroundColor;
+        ImageMode = settings.ImageMode;
+        PlaybackOrder = settings.PlaybackOrder;
     }
 }
 

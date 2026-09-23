@@ -1,4 +1,4 @@
-import { arrangePhotos, photoKey } from "./playback-state.js?v=20260922-gallery";
+import { arrangePhotos, photoKey } from "./playback-state.js?v=20260923-collections";
 import {
   PIN_ITERATIONS,
   bytesToBase64,
@@ -10,7 +10,7 @@ import {
   isCryptoAvailable,
   randomBytes,
   verifyPinKey
-} from "./offline-crypto.js?v=20260922-gallery";
+} from "./offline-crypto.js?v=20260923-collections";
 import {
   deleteCatalog,
   estimateStorage,
@@ -21,8 +21,8 @@ import {
   makeServerKey,
   saveCatalogBundle,
   updateCatalog
-} from "./offline-store.js?v=20260922-gallery";
-import { getSyncPlan, syncCatalog } from "./offline-sync.js?v=20260922-gallery";
+} from "./offline-store.js?v=20260923-collections";
+import { getSyncPlan, syncCatalog } from "./offline-sync.js?v=20260923-collections";
 
 const stage = document.querySelector("#stage");
 let image = document.querySelector("#slideImage");
@@ -63,6 +63,7 @@ const lockOffline = document.querySelector("#lockOffline");
 const offlineModal = document.querySelector("#offlineModal");
 
 let state = null;
+let activeCollectionId = new URLSearchParams(location.search).get('collection') || '';
 let serverState = null;
 let wakeLock = null;
 const viewerId = globalThis.crypto?.randomUUID?.() || String(Math.random());
@@ -207,13 +208,11 @@ function folderNameFromPath(value) {
 }
 
 function getDesktopLibraries(currentState = serverState || state) {
-  if (!currentState?.canConfigure || !Array.isArray(currentState.recentSlideshows)) {
+  if (!currentState?.canConfigure || !Array.isArray(currentState.collections)) {
     return [];
   }
 
-  return currentState.recentSlideshows
-    .filter(slideshow => normalizeFolderPath(slideshow.folderPath))
-    .slice(0, 8);
+  return currentState.collections.map(collection => ({...collection, folderName: collection.name}));
 }
 
 function isCurrentDesktopLibrary(slideshow) {
@@ -248,6 +247,7 @@ function getCatalogMetadataUpdate(catalog, nextState) {
     ...catalog,
     folderName: nextState.folderName || catalog.folderName,
     folderPath: nextState.folderPath || "",
+    collectionId: nextState.collectionId || catalog.collectionId || '',
     imageMode: nextState.imageMode || catalog.imageMode || "fit",
     playbackOrder: nextState.playbackOrder || catalog.playbackOrder || "shuffle",
     slideSeconds: nextState.slideSeconds || catalog.slideSeconds || 7,
@@ -256,12 +256,14 @@ function getCatalogMetadataUpdate(catalog, nextState) {
 }
 
 function catalogMetadataChanged(catalog, nextCatalog) {
-  return ["folderName", "folderPath", "imageMode", "playbackOrder", "slideSeconds", "backgroundColor"]
+  return ["folderName", "folderPath", "collectionId", "imageMode", "playbackOrder", "slideSeconds", "backgroundColor"]
     .some(key => catalog[key] !== nextCatalog[key]);
 }
 
 async function fetchJson(path, options) {
-  const response = await fetch(path, { cache: "no-store", signal: AbortSignal.timeout(10000), ...options });
+  const url = new URL(path, location.href);
+  if (activeCollectionId && !url.searchParams.has('collection') && /^\/api\/(state|images|offline-source|playback-settings|settings|rescan)$/.test(url.pathname)) url.searchParams.set('collection', activeCollectionId);
+  const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(10000), ...options });
   if (!response.ok) {
     throw new Error("Unavailable");
   }
@@ -342,7 +344,7 @@ function updateMouseCursorVisibility() {
 
 async function openNativeSlideshowWindow() {
   try {
-    const response = await fetch("/api/open-slideshow-window", { method: "POST" });
+    const response = await fetch(`/api/open-slideshow-window?collection=${encodeURIComponent(activeCollectionId)}`, { method: "POST" });
     return response.ok;
   } catch {
     return false;
@@ -391,6 +393,7 @@ async function load() {
   try {
     if (await openRequestedOfflineCatalog()) { fetchJson('/api/state').then(value=>{serverState=value;refreshStageLibraryButton();}).catch(()=>{}); return; }
     state = serverState = await fetchJson("/api/state");
+    activeCollectionId = state.collectionId || activeCollectionId;
     arrangeCurrent(await fetchJson("/api/images?shuffle=false"));
     mode = "online";
     activeOfflineCatalog = null;
@@ -418,10 +421,12 @@ async function reloadSlideshow(nextState, options = {}) {
     savePosition();
     const previous = images[index] && photoKey(images[index]);
     const previousFolder = state?.folderPath;
+    const previousName = state?.folderName;
     state = serverState = nextState || await fetchJson("/api/state");
+    activeCollectionId = state.collectionId || activeCollectionId;
     activeOfflineCatalog = null; offlineSession = null;
     arrangeCurrent(await fetchJson("/api/images?shuffle=false"));
-    if (previous !== (images[index] && photoKey(images[index])) || previousFolder !== state.folderPath || options.force) await render();
+    if (previous !== (images[index] && photoKey(images[index])) || previousFolder !== state.folderPath || previousName !== state.folderName || options.force) await render();
     else { positionText.textContent = `${index + 1} / ${images.length}`; preloadFollowingImage(); }
     showConnection();
   } finally {
@@ -439,7 +444,7 @@ function startRefreshWatcher() {
     try {
       const nextState = await fetchJson("/api/state");
       serverState = nextState; showConnection();
-      if (nextState.version !== state?.version || nextState.folderPath !== state?.folderPath) {
+      if (nextState.version !== state?.version || nextState.folderPath !== state?.folderPath || nextState.folderName !== state?.folderName) {
         await reloadSlideshow(nextState);
         showTapFeedback("Switched", "center");
         showChromeTemporarily();
@@ -1012,15 +1017,9 @@ async function openDesktopLibrary(slideshow) {
 
   showChrome();
   try {
-    const currentPath = normalizeFolderPath(state?.folderPath).toLowerCase();
-    const nextPath = folderPath.toLowerCase();
-    const nextState = currentPath && currentPath === nextPath
-      ? await fetchJson("/api/rescan", { method: "POST" })
-      : await fetchJson("/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ folderPath })
-      });
+    const collection = serverState.collections?.find(item => normalizeFolderPath(item.folderPath).toLowerCase() === folderPath.toLowerCase());
+    if (!collection) throw new Error('Collection unavailable');
+    const nextState = await fetchJson(`/api/state?collection=${encodeURIComponent(collection.id)}`);
 
     mode = "online";
     activeOfflineCatalog = null;
@@ -1358,12 +1357,21 @@ async function fetchRefreshSourceForCatalog(catalog, showErrors) {
   let nextState;
   let imageList;
   try {
-    const source = await fetchJson("/api/offline-source");
+    let collectionId = catalog.collectionId;
+    if (!collectionId) {
+      const listing = await fetchJson('/api/collections');
+      for (const collection of listing.collections || []) {
+        const candidate = await fetchJson(`/api/state?collection=${encodeURIComponent(collection.id)}`);
+        if (folderIdentityFor(makeServerKey(), candidate) === catalog.folderIdentity) { collectionId = collection.id; break; }
+      }
+    }
+    if (!collectionId) throw new Error('Collection unavailable');
+    const source = await fetchJson(`/api/offline-source?collection=${encodeURIComponent(collectionId)}`);
     nextState = source.state;
     imageList = source.images || [];
   } catch {
     if (showErrors) {
-      await messageModal("Server unavailable", "Reconnect to Slide Show before refreshing this offline copy.");
+      await messageModal("Collection unavailable", "Make sure this collection is shared from its original PC, then try again.");
     }
     return null;
   }
@@ -1378,7 +1386,7 @@ async function fetchRefreshSourceForCatalog(catalog, showErrors) {
   const plan = await getSyncPlan(nextState);
   if (plan.existing?.id !== catalog.id) {
     if (showErrors) {
-      await messageModal("Different folder", "Select this slideshow folder on the PC before refreshing its offline copy.");
+      await messageModal("Collection unavailable", "The source no longer matches this saved copy.");
     }
     return null;
   }
@@ -1548,13 +1556,9 @@ async function showOfflineLibrary() {
   const storageText = storage?.usage && storage?.quota
     ? `Storage used: ${formatBytes(storage.usage)} of ${formatBytes(storage.quota)}.`
     : "Encrypted copies are stored in this browser.";
-  const currentFolderIdentity = mode === "online" && state
-    ? folderIdentityFor(makeServerKey(), state)
-    : null;
-
   const items = catalogs.map(catalog => {
     const protection = catalog.protectionMode === "pin" ? "PIN protected" : "local key";
-    const canRefresh = currentFolderIdentity && catalog.folderIdentity === currentFolderIdentity;
+    const canRefresh = catalog.serverKey === makeServerKey();
     return `
       <article class="catalog-card">
         <strong>${escapeHtml(catalog.displayName)}</strong>

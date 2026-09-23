@@ -265,6 +265,7 @@ final class OfflineImageStore {
             nextImages);
 
         catalog.playbackOrder = state.optString("playbackOrder", "shuffle");
+        catalog.collectionId = state.optString("collectionId", "");
         long savedBytes = 0;
         for (MainActivity.SlideImage image : nextImages) savedBytes += imageFile(slotId, image).length();
         catalog = catalog.withSize(savedBytes);
@@ -360,7 +361,8 @@ final class OfflineImageStore {
             existing.offlineImageFormat,
             existing.pinSalt,
             existing.pinHash,
-            existing.images);
+            existing.images).withOrder(state.optString("playbackOrder", existing.playbackOrder))
+                .withCollectionId(state.optString("collectionId", existing.collectionId));
         writeCatalog(catalog);
         return catalog;
     }
@@ -432,41 +434,15 @@ final class OfflineImageStore {
     }
 
     Bitmap decodeBitmap(OfflineCatalog catalog, MainActivity.SlideImage image, int targetWidth, int targetHeight) throws Exception {
-        File file = imageFile(catalog.slotId, image);
-        ImageStorageKind storageKind = imageStorageKind(file);
-
+        byte[] bytes = readImageBytes(imageFile(catalog.slotId, image));
         BitmapFactory.Options options = new BitmapFactory.Options();
-        Bitmap bitmap;
-        if (storageKind == ImageStorageKind.MEDIA_ENCRYPTED) {
-            byte[] bytes = readMediaEncryptedImage(file);
-            if (targetWidth > 0 && targetHeight > 0) {
-                BitmapFactory.Options bounds = new BitmapFactory.Options();
-                bounds.inJustDecodeBounds = true;
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
-                options.inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight);
-            }
-            bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
-        } else if (storageKind == ImageStorageKind.LEGACY_ENCRYPTED) {
-            byte[] bytes = readEncrypted(file);
-            replaceWithMediaEncryptedImage(file, bytes);
-            if (targetWidth > 0 && targetHeight > 0) {
-                BitmapFactory.Options bounds = new BitmapFactory.Options();
-                bounds.inJustDecodeBounds = true;
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
-                options.inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight);
-            }
-            bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
-        } else {
-            byte[] bytes = readPlainFile(file);
-            replaceWithMediaEncryptedImage(file, bytes);
-            if (targetWidth > 0 && targetHeight > 0) {
-                BitmapFactory.Options bounds = new BitmapFactory.Options();
-                bounds.inJustDecodeBounds = true;
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
-                options.inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight);
-            }
-            bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+        if (targetWidth > 0 && targetHeight > 0) {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
+            options.inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight, targetWidth, targetHeight);
         }
+        Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
         if (bitmap == null) {
             throw new IllegalStateException("Image could not be decoded: " + image.name);
         }
@@ -680,10 +656,19 @@ final class OfflineImageStore {
             return;
         }
 
-        byte[] bytes = storageKind == ImageStorageKind.LEGACY_ENCRYPTED
-            ? readEncrypted(file)
-            : readPlainFile(file);
-        replaceWithMediaEncryptedImage(file, bytes);
+        readImageBytes(file);
+    }
+
+    private byte[] readImageBytes(File file) throws Exception {
+        // Multiple previews can migrate the same saved image, including across activities.
+        synchronized (OfflineImageStore.class) {
+            ImageStorageKind storageKind = imageStorageKind(file);
+            if (storageKind == ImageStorageKind.MEDIA_ENCRYPTED) return readMediaEncryptedImage(file);
+            byte[] bytes = storageKind == ImageStorageKind.LEGACY_ENCRYPTED
+                ? readEncrypted(file) : readPlainFile(file);
+            replaceWithMediaEncryptedImage(file, bytes);
+            return bytes;
+        }
     }
 
     private void replaceWithMediaEncryptedImage(File destination, byte[] bytes) throws Exception {
@@ -696,13 +681,7 @@ final class OfflineImageStore {
             writeMediaEncryptedFile(partial, input);
         }
 
-        if (destination.exists() && !destination.delete()) {
-            throw new IllegalStateException("Could not replace image.");
-        }
-
-        if (!partial.renameTo(destination)) {
-            throw new IllegalStateException("Could not store image.");
-        }
+        Os.rename(partial.getAbsolutePath(), destination.getAbsolutePath());
     }
 
     private void writeMediaEncryptedFile(File destination, InputStream plaintext) throws Exception {
@@ -1131,6 +1110,7 @@ final class OfflineImageStore {
         final String imageMode;
         final int slideSeconds;
         String playbackOrder = "shuffle";
+        String collectionId = "";
         final long serverVersion;
         final long syncedAt;
         final long sizeBytes;
@@ -1159,15 +1139,15 @@ final class OfflineImageStore {
         }
 
         OfflineCatalog withDisplayName(String nextDisplayName) {
-            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, nextDisplayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, pinSalt, pinHash, images).withOrder(playbackOrder);
+            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, nextDisplayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, pinSalt, pinHash, images).withOrder(playbackOrder).withCollectionId(collectionId);
         }
 
         OfflineCatalog withSize(long nextSizeBytes) {
-            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, nextSizeBytes, offlineImageFormat, pinSalt, pinHash, images).withOrder(playbackOrder);
+            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, nextSizeBytes, offlineImageFormat, pinSalt, pinHash, images).withOrder(playbackOrder).withCollectionId(collectionId);
         }
 
         OfflineCatalog withPin(String nextPinSalt, String nextPinHash) {
-            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, nextPinSalt, nextPinHash, images).withOrder(playbackOrder);
+            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, nextPinSalt, nextPinHash, images).withOrder(playbackOrder).withCollectionId(collectionId);
         }
 
         OfflineCatalog withRecoveredImages(List<MainActivity.SlideImage> recoveredImages) {
@@ -1175,10 +1155,11 @@ final class OfflineImageStore {
                 return this;
             }
 
-            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, pinSalt, pinHash, recoveredImages).withOrder(playbackOrder);
+            return new OfflineCatalog(slotId, serverKey, serverName, folderIdentity, displayName, folderName, backgroundColor, imageMode, slideSeconds, serverVersion, syncedAt, sizeBytes, offlineImageFormat, pinSalt, pinHash, recoveredImages).withOrder(playbackOrder).withCollectionId(collectionId);
         }
 
         OfflineCatalog withOrder(String order) { playbackOrder = "name".equals(order) || "date".equals(order) ? order : "shuffle"; return this; }
+        OfflineCatalog withCollectionId(String id) { collectionId = id == null ? "" : id; return this; }
 
         boolean hasPin() {
             return !pinSalt.isEmpty() && !pinHash.isEmpty();
@@ -1194,6 +1175,7 @@ final class OfflineImageStore {
             object.put("serverKey", serverKey);
             object.put("serverName", serverName);
             object.put("folderIdentity", folderIdentity);
+            object.put("collectionId", collectionId);
             object.put("displayName", displayName);
             object.put("folderName", folderName);
             object.put("backgroundColor", backgroundColor);
@@ -1257,7 +1239,7 @@ final class OfflineImageStore {
                 object.optString("offlineImageFormat", ""),
                 object.optString("pinSalt", ""),
                 object.optString("pinHash", ""),
-                images).withOrder(object.optString("playbackOrder", "shuffle"));
+                images).withOrder(object.optString("playbackOrder", "shuffle")).withCollectionId(object.optString("collectionId", ""));
         }
     }
 }

@@ -17,11 +17,11 @@ public sealed class AppWebServer : IAsyncDisposable
 {
     private readonly AppState _state;
     private readonly Func<string?, Task<string?>> _chooseFolderAsync;
-    private readonly Func<Task> _openSlideshowWindowAsync;
+    private readonly Func<string?, Task> _openSlideshowWindowAsync;
     private WebApplication? _app;
     private HttpsCertificateStore? _httpsCertificates;
 
-    public AppWebServer(AppState state, Func<string?, Task<string?>> chooseFolderAsync, Func<Task> openSlideshowWindowAsync)
+    public AppWebServer(AppState state, Func<string?, Task<string?>> chooseFolderAsync, Func<string?, Task> openSlideshowWindowAsync)
     {
         _state = state;
         _chooseFolderAsync = chooseFolderAsync;
@@ -98,6 +98,18 @@ public sealed class AppWebServer : IAsyncDisposable
 
     private void Configure(WebApplication app)
     {
+        app.Use(async (context, next) =>
+        {
+            var path = context.Request.Path.Value ?? "";
+            if ((path is "/api/state" or "/api/images" or "/api/offline-source" or "/api/playback-settings" or "/api/settings" or "/api/rescan" || path.StartsWith("/image/", StringComparison.Ordinal))
+                && !_state.CanAccessCollection(CollectionId(context), IsLocalRequest(context)))
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                await context.Response.WriteAsJsonAsync(new { message = "This collection is no longer available from this PC." });
+                return;
+            }
+            await next(context);
+        });
         var webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
         var assetsRoot = Path.Combine(webRoot, "assets");
         var settingsPage = Path.Combine(webRoot, "pages", "settings.html");
@@ -156,25 +168,25 @@ public sealed class AppWebServer : IAsyncDisposable
         });
         app.MapGet("/api/state", (HttpContext context) =>
         {
-            _state.RefreshCatalog();
-            return Results.Json(_state.GetSnapshot(IsLocalRequest(context)));
+            _state.RefreshCatalog(CollectionId(context));
+            return Results.Json(_state.GetSnapshot(IsLocalRequest(context), CollectionId(context)));
         });
         app.MapGet("/api/images", (HttpContext context) =>
         {
             var shuffle = !string.Equals(context.Request.Query["shuffle"], "false", StringComparison.OrdinalIgnoreCase);
-            return Results.Json(_state.GetImages(shuffle));
+            return Results.Json(_state.GetImages(shuffle, CollectionId(context)));
         });
         app.MapGet("/api/offline-source", (HttpContext context) =>
         {
-            _state.RefreshCatalog();
-            var state = _state.GetSnapshot(IsLocalRequest(context));
-            var images = _state.GetImages(shuffle: false);
+            _state.RefreshCatalog(CollectionId(context));
+            var state = _state.GetSnapshot(IsLocalRequest(context), CollectionId(context));
+            var images = _state.GetImages(shuffle: false, state.CollectionId);
             return Results.Json(new OfflineSourceDto(state, images));
         });
 
         app.MapGet("/image/{id:int}", (HttpContext context, int id) =>
         {
-            var image = _state.GetImage(id);
+            var image = _state.GetImage(id, CollectionId(context));
             if (image is null || !File.Exists(image.Path))
             {
                 return Results.NotFound();
@@ -193,15 +205,15 @@ public sealed class AppWebServer : IAsyncDisposable
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
-            _state.UpdateSettings(update);
+            _state.UpdateSettings(update, CollectionId(context));
             StartupManager.SetEnabled(_state.GetSettings().StartAtLogin);
-            return Results.Json(_state.GetSnapshot(true));
+            return Results.Json(_state.GetSnapshot(true, update.FolderPath is not null ? null : CollectionId(context)));
         });
 
         app.MapPost("/api/playback-settings", (HttpContext context, PlaybackSettingsUpdateDto update) =>
         {
-            _state.UpdatePlaybackSettings(update);
-            return Results.Json(_state.GetSnapshot(IsLocalRequest(context)));
+            _state.UpdatePlaybackSettings(update, CollectionId(context));
+            return Results.Json(_state.GetSnapshot(IsLocalRequest(context), CollectionId(context)));
         });
 
         app.MapPost("/api/viewer-heartbeat", (HttpContext context, ViewerHeartbeatDto? heartbeat) =>
@@ -243,7 +255,8 @@ public sealed class AppWebServer : IAsyncDisposable
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
-            await _openSlideshowWindowAsync();
+            if (!_state.CanAccessCollection(CollectionId(context), true)) return Results.NotFound();
+            await _openSlideshowWindowAsync(CollectionId(context));
             return Results.Ok();
         });
 
@@ -254,10 +267,29 @@ public sealed class AppWebServer : IAsyncDisposable
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
-            _state.Rescan();
-            return Results.Json(_state.GetSnapshot(true));
+            _state.Rescan(CollectionId(context));
+            return Results.Json(_state.GetSnapshot(true, CollectionId(context)));
+        });
+
+        app.MapGet("/api/collections", (HttpContext context) => Results.Json(new
+        {
+            computerName = Environment.MachineName,
+            collections = _state.GetCollections(IsLocalRequest(context))
+        }));
+        app.MapPost("/api/collections/{id}", (HttpContext context, string id, CollectionUpdateDto update) =>
+        {
+            if (!IsLocalRequest(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+            return _state.UpdateCollection(id, update) ? Results.Json(_state.GetSnapshot(true, id)) : Results.NotFound();
+        });
+        app.MapDelete("/api/collections/{id}", (HttpContext context, string id) =>
+        {
+            if (!IsLocalRequest(context)) return Results.StatusCode(StatusCodes.Status403Forbidden);
+            return _state.RemoveCollection(id) ? Results.Json(_state.GetSnapshot(true)) : Results.NotFound();
         });
     }
+
+    private static string? CollectionId(HttpContext context) =>
+        string.IsNullOrWhiteSpace(context.Request.Query["collection"]) ? null : context.Request.Query["collection"].ToString();
 
     private static bool IsLocalRequest(HttpContext context)
     {
