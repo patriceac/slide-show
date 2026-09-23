@@ -90,6 +90,8 @@ public class MainActivity extends Activity {
     private TextView discoveryTitle;
     private TextView discoveryMessage;
     private ProgressBar discoveryProgress;
+    private Button searchAgainButton;
+    private boolean discoveryInProgress;
     private ImageView slideImage;
     private TextView emptyTitle;
     private TextView emptyMessage;
@@ -444,9 +446,10 @@ public class MainActivity extends Activity {
         actions.setPadding(0, dp(20), 0, 0);
         shell.addView(actions);
 
-        Button searchAgain = button("Search again", false);
-        searchAgain.setOnClickListener(v -> discoverServers());
-        actions.addView(searchAgain, fullButtonParams());
+        searchAgainButton = button("Search again", false);
+        setDiscoveryInProgress(discoveryInProgress);
+        searchAgainButton.setOnClickListener(v -> discoverServers());
+        actions.addView(searchAgainButton, fullButtonParams());
 
         Button manual = button("Enter address manually", false);
         manual.setBackground(buttonBackground(Color.TRANSPARENT, false));
@@ -459,7 +462,17 @@ public class MainActivity extends Activity {
         renderOfflineOptions(offlineStore.loadCatalogs());
     }
 
+    private void setDiscoveryInProgress(boolean inProgress) {
+        discoveryInProgress = inProgress;
+        if (searchAgainButton != null) {
+            searchAgainButton.setEnabled(!inProgress);
+            searchAgainButton.setAlpha(inProgress ? 0.45f : 1f);
+        }
+    }
+
     private void discoverServers() {
+        if (discoveryInProgress) return;
+        setDiscoveryInProgress(true);
         discovered.clear();
         if (discoveryList != null) {
             renderOfflineOptions(offlineStore.loadCatalogs());
@@ -524,6 +537,7 @@ public class MainActivity extends Activity {
                 if (lock != null && lock.isHeld()) {
                     lock.release();
                 }
+                handler.post(() -> setDiscoveryInProgress(false));
             }
 
             handler.post(() -> {
