@@ -66,7 +66,7 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int WIFI_PERMISSION_REQUEST = 42;
-    private static final int DISCOVERY_PORT = 51778;
+    private static final int DISCOVERY_PORT = 5179;
     private static final String DISCOVERY_PROBE = "SLIDE_SHOW_DISCOVER_V1";
     private static final String LOG_TAG = "SlideShowAndroid";
     private static final long SERVER_FOLDER_WATCH_MS = 5000;

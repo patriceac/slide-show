@@ -7,7 +7,7 @@ namespace SlideShow;
 
 public sealed class DiscoveryService : IAsyncDisposable
 {
-    private const int DiscoveryPort = 51778;
+    private const int DiscoveryPort = 5179; // Stay below Windows' dynamic port reservation range.
     private const string Probe = "SLIDE_SHOW_DISCOVER_V1";
 
     private readonly AppState _state;
