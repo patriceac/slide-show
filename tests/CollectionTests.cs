@@ -70,5 +70,34 @@ public sealed class CollectionTests : IDisposable
         Assert.Equal("Mountain walks", state.GetSnapshot(false, shared.Id).FolderName);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void UnavailableCollectionsDisappearAndReturnWithoutBeingRemoved(bool local)
+    {
+        var state = CreateState();
+        var folder = Folder("Removable");
+        var disconnected = Path.Combine(_root, "Disconnected");
+        state.UpdateSettings(new SettingsUpdateDto { FolderPath = folder });
+        var id = Assert.Single(state.GetCollections(true)).Id;
+        state.UpdateCollection(id, new CollectionUpdateDto { Name = "Travel", Shared = true });
+
+        Directory.Move(folder, disconnected);
+        Assert.Empty(state.GetCollections(local));
+        Assert.Empty(state.GetSnapshot(local, id).Collections);
+        Assert.Equal(id, Assert.Single(CreateState().GetSettings().Collections).Id);
+
+        Directory.Move(disconnected, folder);
+        var restored = Assert.Single(state.GetCollections(local));
+        Assert.Equal(id, restored.Id);
+        Assert.Equal("Travel", restored.Name);
+        Assert.True(restored.Shared);
+        Assert.True(restored.Available);
+        Assert.Equal(1, restored.ImageCount);
+
+        Directory.Move(folder, disconnected);
+        Assert.Empty(state.GetCollections(local));
+    }
+
     public void Dispose() { if (Directory.Exists(_root)) Directory.Delete(_root, true); }
 }

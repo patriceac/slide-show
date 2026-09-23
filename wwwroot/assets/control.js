@@ -105,6 +105,11 @@ function folderName(path) {
     .pop();
 }
 function render(state, saved = false) {
+  const available = (state.collections || []).some(item => item.id === state.collectionId);
+  if (!available) state = { ...state, folderPath: null, folderName: null, imageCount: 0, scanMessage: null, shared: false };
+  for (const selector of [".source", ".sharing-row", "#playbackOptions", ".folder-tools"])
+    document.querySelector(selector).hidden = !available;
+  $("stageEmpty").querySelector("span").textContent = state.collections?.length ? "Select a collection to start." : "Add a collection to start.";
   const draft = !saved && currentState?.collectionId === state.collectionId && dirty() ? values() : null;
   currentState = state;
   selectedCollection = state.collectionId || null;

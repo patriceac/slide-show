@@ -196,7 +196,7 @@ public sealed class AppState
                 return new CollectionDto(item.Id, item.Name, catalog.Count, item.Shared,
                     catalog.Count > 0 ? $"/image/0?collection={item.Id}&v={catalog.Version}" : null,
                     local ? item.FolderPath : null, Directory.Exists(item.FolderPath));
-            }).ToArray();
+            }).Where(item => item.Available).ToArray();
         }
     }
 
